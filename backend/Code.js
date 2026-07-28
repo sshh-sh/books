@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -191,11 +191,64 @@ function updateBranchOrder(orderedNames) {
 
 /* ---------------- 정보나루: 도서 소장/대출 여부 ---------------- */
 
+const PRIORITY_BRANCH_NAMES = ['남사', '용인중앙'];
+
+/**
+ * 남사/용인중앙 지점의 libCode를 최초 1회만 조회해서 스크립트 속성에 영구 캐싱.
+ * (지점 코드는 바뀌지 않으므로 매번 API를 부를 필요가 없음)
+ */
+function getPriorityLibCodes_() {
+  const props = PropertiesService.getScriptProperties();
+  const cached = props.getProperty('PRIORITY_LIB_CODES');
+  if (cached) return JSON.parse(cached);
+
+  const libs = fetchYonginBranches_(); // libSrch API 1회 호출
+  const codes = {};
+  libs.forEach(l => {
+    const name = stripDoseogwan_(l.libName);
+    if (PRIORITY_BRANCH_NAMES.indexOf(name) !== -1) codes[name] = l.libCode;
+  });
+  props.setProperty('PRIORITY_LIB_CODES', JSON.stringify(codes));
+  return codes;
+}
+
+/** bookExist 1건 호출: 해당 지점이 이 책을 보유하는지(hasBook)와 대출가능 여부(loanAvailable)를 함께 반환 */
+function checkLibraryHasBook_(key, isbn13, libCode) {
+  const url = 'http://data4library.kr/api/bookExist'
+    + '?authKey=' + encodeURIComponent(key)
+    + '&isbn13=' + encodeURIComponent(isbn13)
+    + '&libCode=' + encodeURIComponent(libCode)
+    + '&format=json';
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const data = JSON.parse(res.getContentText());
+  const result = data.response && data.response.result;
+  return {
+    hasBook: !!result && result.hasBook === 'Y',
+    available: !!result && result.loanAvailable === 'Y'
+  };
+}
+
+/**
+ * 도서관 보유/대출가능 여부 조회.
+ * 정보나루 하루 500건 할당량을 아끼기 위해, 먼저 남사·용인중앙 2곳만 bookExist로 직접 확인(최대 2건).
+ * 둘 다 없으면(=hasBook이 둘 다 N이면) 그때만 용인시 전체 지점을 대상으로 한 기존 방식(최대 22건)으로 폴백.
+ */
 function getBookAvailability(isbn13) {
   const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
   if (!key) throw new Error('LIBRARY_KEY가 설정되지 않았습니다.');
 
-  // 1) 이 책을 보유한 도서관 목록 조회 (경기도 전체 중 용인시만 필터)
+  // 1) 남사/용인중앙 우선 확인
+  const priorityCodes = getPriorityLibCodes_();
+  const priorityLibs = [];
+  Object.keys(priorityCodes).forEach(name => {
+    try {
+      const r = checkLibraryHasBook_(key, isbn13, priorityCodes[name]);
+      if (r.hasBook) priorityLibs.push({ libraryName: name, available: r.available, libCode: priorityCodes[name] });
+    } catch (err) { /* 개별 조회 실패는 무시하고 아래 전체검색으로 폴백 */ }
+  });
+  if (priorityLibs.length > 0) return priorityLibs;
+
+  // 2) 둘 다 없으면 전체 지점 검색으로 폴백 (기존 방식)
   const srchUrl = 'http://data4library.kr/api/libSrchByBook'
     + '?authKey=' + encodeURIComponent(key)
     + '&isbn=' + encodeURIComponent(isbn13)
@@ -211,18 +264,11 @@ function getBookAvailability(isbn13) {
     .map(l => l.lib)
     .filter(l => (l.address || '').indexOf('용인시') !== -1);
 
-  // 2) 보유한 도서관마다 대출가능 여부 개별 조회
   return yonginLibs.map(l => {
     let available = false;
     try {
-      const existUrl = 'http://data4library.kr/api/bookExist'
-        + '?authKey=' + encodeURIComponent(key)
-        + '&isbn13=' + encodeURIComponent(isbn13)
-        + '&libCode=' + encodeURIComponent(l.libCode)
-        + '&format=json';
-      const existRes = UrlFetchApp.fetch(existUrl, { muteHttpExceptions: true });
-      const existData = JSON.parse(existRes.getContentText());
-      available = existData.response.result.loanAvailable === 'Y';
+      const r = checkLibraryHasBook_(key, isbn13, l.libCode);
+      available = r.available;
     } catch (err) { /* 개별 조회 실패는 무시하고 대출불가로 처리 */ }
     return { libraryName: stripDoseogwan_(l.libName), available: available, libCode: l.libCode };
   });
