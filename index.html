@@ -451,7 +451,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">도서관 소장/대출 정보 마지막 확인: 5분 전 · © 2026 읽어용 · 개발 최송희 · v1</footer>
+  <footer class="site-footer">도서관 정보확인: 0분전 · © 2026 읽어용 · 개발 최송희 · v1</footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용) -->
@@ -587,8 +587,8 @@ main{flex:1;padding:22px 24px 60px;}
 const API_BASE = 'https://script.google.com/macros/s/AKfycbzzNbPguhf1dhI2BGgK_KlvPb154RVUB0khLF-2IpGIwRzqndTVYYk5gOYPhRM_qNa2/exec';
 
 async function apiGet(action, params){
-  const qs = new URLSearchParams(Object.assign({ action }, params||{}));
-  const res = await fetch(API_BASE + '?' + qs.toString());
+  const qs = new URLSearchParams(Object.assign({ action, _: Date.now() }, params||{}));
+  const res = await fetch(API_BASE + '?' + qs.toString(), { cache: 'no-store' });
   const json = await res.json();
   if(!json.ok) throw new Error(json.error || 'API 오류');
   return json.data;
@@ -685,13 +685,30 @@ async function loadWant(){
         <div class="book-meta">
           <div class="book-title">${escapeHtml(b.title)}</div>
           <div class="book-author-year">${escapeHtml(b.author)}</div>
+          <div class="avail-lines" id="avail-${b.userBook.id}"><div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보 확인 중...</div></div>
           <div class="reason-input">
             <textarea rows="2" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
           </div>
         </div>
       </div>
     `).join('');
+    list.forEach(b => loadAvailability(b));
   }catch(err){ showApiError(err); grid.innerHTML = '<div class="empty-msg">불러오지 못했어요.</div>'; }
+}
+async function loadAvailability(b){
+  const box = document.getElementById('avail-'+b.userBook.id);
+  if(!box) return;
+  if(!b.isbn){ box.innerHTML = ''; return; }
+  try{
+    const libs = await apiGet('getBookAvailability', { isbn13: b.isbn });
+    if(!libs.length){ box.innerHTML = '<div><span class="al-label">보유도서관</span> 없음</div>'; return; }
+    const owned = libs.map(l=>l.libraryName).join(', ');
+    const available = libs.filter(l=>l.available).map(l=>l.libraryName);
+    box.innerHTML = `
+      <div><span class="al-label">보유도서관</span> ${escapeHtml(owned)}</div>
+      <div><span class="al-label">대출가능</span> ${available.length ? escapeHtml(available.join(', ')) : '없음'}</div>
+    `;
+  }catch(err){ box.innerHTML = ''; }
 }
 async function borrowThis(userBookId, checkbox){
   checkbox.disabled = true;
