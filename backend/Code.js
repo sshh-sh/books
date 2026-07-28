@@ -140,18 +140,35 @@ function updateBranchOrder(orderedNames) {
 function getBookAvailability(isbn13) {
   const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
   if (!key) throw new Error('LIBRARY_KEY가 설정되지 않았습니다.');
-  const url = 'http://data4library.kr/api/libSrchByBook'
+
+  // 1) 이 책을 보유한 도서관 목록 조회 (경기도 전체 중 용인시만 필터)
+  const srchUrl = 'http://data4library.kr/api/libSrchByBook'
     + '?authKey=' + encodeURIComponent(key)
     + '&isbn=' + encodeURIComponent(isbn13)
     + '&region=' + YONGIN_REGION_CODE
     + '&pageSize=500&format=json';
-  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  const data = JSON.parse(res.getContentText());
-  const libs = (data.response && data.response.libs) || [];
-  const yonginNames = getLibraryBranches().map(b => b.branch_name);
-  return libs
-    .map(l => ({ libraryName: l.libs.libName, available: l.libs.loanAvailable === 'Y' }))
-    .filter(l => yonginNames.indexOf(l.libraryName) !== -1);
+  const srchRes = UrlFetchApp.fetch(srchUrl, { muteHttpExceptions: true });
+  const srchData = JSON.parse(srchRes.getContentText());
+  const allLibs = (srchData.response && srchData.response.libs) || [];
+  const yonginLibs = allLibs
+    .map(l => l.lib)
+    .filter(l => (l.address || '').indexOf('용인시') !== -1);
+
+  // 2) 보유한 도서관마다 대출가능 여부 개별 조회
+  return yonginLibs.map(l => {
+    let available = false;
+    try {
+      const existUrl = 'http://data4library.kr/api/bookExist'
+        + '?authKey=' + encodeURIComponent(key)
+        + '&isbn13=' + encodeURIComponent(isbn13)
+        + '&libCode=' + encodeURIComponent(l.libCode)
+        + '&format=json';
+      const existRes = UrlFetchApp.fetch(existUrl, { muteHttpExceptions: true });
+      const existData = JSON.parse(existRes.getContentText());
+      available = existData.response.result.loanAvailable === 'Y';
+    } catch (err) { /* 개별 조회 실패는 무시하고 대출불가로 처리 */ }
+    return { libraryName: l.libName, available: available };
+  });
 }
 
 /* ---------------- Books / BookLibraries ---------------- */
