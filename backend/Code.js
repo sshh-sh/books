@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -96,6 +96,54 @@ function cleanTitle_(title) {
 function guessCategory_(categoryName) {
   if (!categoryName) return '기타';
   return categoryName.indexOf('소설') !== -1 ? '소설' : '비소설';
+}
+
+/**
+ * 복구용: 외부에서 잘못된 인코딩으로 등록된 title/author(깨진 문자, U+FFFD 포함)를
+ * ISBN으로 알라딘을 다시 조회해서 덮어씀. 정상인 행은 건드리지 않아 여러 번 실행해도 안전.
+ */
+function repairBookTitlesByIsbn() {
+  const key = PropertiesService.getScriptProperties().getProperty('ALADIN_KEY');
+  if (!key) throw new Error('ALADIN_KEY가 설정되지 않았습니다.');
+  const sheet = getSheet_(SHEETS.BOOKS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxTitle = headers.indexOf('title');
+  const idxAuthor = headers.indexOf('author');
+  const idxIsbn = headers.indexOf('isbn');
+  const idxCategory = headers.indexOf('category');
+  const results = [];
+
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    const isbn = row[idxIsbn];
+    const title = row[idxTitle] || '';
+    const author = row[idxAuthor] || '';
+    const category = row[idxCategory] || '';
+    if (!isbn) continue;
+    if (title.indexOf('�') === -1 && author.indexOf('�') === -1 && category.indexOf('�') === -1) continue;
+
+    const url = 'https://www.aladin.co.kr/ttb/api/ItemLookUp.aspx'
+      + '?ttbkey=' + encodeURIComponent(key)
+      + '&itemIdType=ISBN13&ItemId=' + encodeURIComponent(isbn)
+      + '&output=js&Version=20131101&OptResult=categoryIdList';
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const data = JSON.parse(res.getContentText());
+    if (data.item && data.item[0]) {
+      const it = data.item[0];
+      const newTitle = cleanTitle_(it.title);
+      const newAuthor = it.author;
+      const newCategory = guessCategory_(it.categoryName);
+      sheet.getRange(r + 1, idxTitle + 1).setValue(newTitle);
+      sheet.getRange(r + 1, idxAuthor + 1).setValue(newAuthor);
+      sheet.getRange(r + 1, idxCategory + 1).setValue(newCategory);
+      results.push({ isbn: isbn, oldTitle: title, newTitle: newTitle });
+    } else {
+      results.push({ isbn: isbn, oldTitle: title, newTitle: null, error: 'ISBN 조회 실패' });
+    }
+    Utilities.sleep(300);
+  }
+  return results;
 }
 
 /* ---------------- 정보나루: 지점 목록 ---------------- */
@@ -191,7 +239,7 @@ function getBookAvailability(isbn13) {
 function findOrCreateBook_(bookData) {
   const sheet = getSheet_(SHEETS.BOOKS);
   const books = sheetToObjects_(sheet);
-  const existing = books.find(b => b.isbn === bookData.isbn13);
+  const existing = books.find(b => String(b.isbn) === String(bookData.isbn13));
   if (existing) return existing.id;
 
   const id = nextId_(sheet);
@@ -202,6 +250,76 @@ function findOrCreateBook_(bookData) {
     bookData.series_total || '', bookData.series_order || ''
   ]);
   return id;
+}
+
+/**
+ * 복구용: (과거 isbn 타입 불일치 버그로) 같은 ISBN을 가진 Books 행이 여러 개 생긴 것을 병합.
+ * 가장 작은 id를 남기고, UserBooks/BookLibraries의 book_id 참조를 남긴 id로 바꾼 뒤 나머지 Books 행은 삭제.
+ */
+function mergeDuplicateBooksByIsbn() {
+  const booksSheet = getSheet_(SHEETS.BOOKS);
+  const books = sheetToObjects_(booksSheet);
+  const byIsbn = {};
+  books.forEach(b => {
+    const key = String(b.isbn);
+    if (!byIsbn[key]) byIsbn[key] = [];
+    byIsbn[key].push(b);
+  });
+
+  const idRemap = {}; // 지워질 book_id -> 남길 book_id
+  const rowsToDelete = []; // Books 시트에서 지울 id 목록
+  Object.keys(byIsbn).forEach(isbn => {
+    const group = byIsbn[isbn];
+    if (group.length < 2) return;
+    group.sort((a, b) => Number(a.id) - Number(b.id));
+    const keep = group[0];
+    group.slice(1).forEach(dup => {
+      idRemap[dup.id] = keep.id;
+      rowsToDelete.push(dup.id);
+    });
+  });
+
+  if (rowsToDelete.length === 0) return { remapped: 0, deleted: 0 };
+
+  // UserBooks의 book_id 참조 갱신
+  const ubSheet = getSheet_(SHEETS.USER_BOOKS);
+  const ubValues = ubSheet.getDataRange().getValues();
+  const ubHeaders = ubValues[0];
+  const idxBookId = ubHeaders.indexOf('book_id');
+  for (let r = 1; r < ubValues.length; r++) {
+    const bookId = ubValues[r][idxBookId];
+    if (idRemap[bookId] !== undefined) {
+      ubSheet.getRange(r + 1, idxBookId + 1).setValue(idRemap[bookId]);
+    }
+  }
+
+  // BookLibraries의 book_id 참조 갱신
+  const blSheet = getSheet_(SHEETS.BOOK_LIBRARIES);
+  const blValues = blSheet.getDataRange().getValues();
+  if (blValues.length > 1) {
+    const blHeaders = blValues[0];
+    const idxBlBookId = blHeaders.indexOf('book_id');
+    for (let r = 1; r < blValues.length; r++) {
+      const bookId = blValues[r][idxBlBookId];
+      if (idRemap[bookId] !== undefined) {
+        blSheet.getRange(r + 1, idxBlBookId + 1).setValue(idRemap[bookId]);
+      }
+    }
+  }
+
+  // 중복 Books 행 삭제 (뒤에서부터)
+  const booksValues = booksSheet.getDataRange().getValues();
+  const booksHeaders = booksValues[0];
+  const idxId = booksHeaders.indexOf('id');
+  const rowsBySheetIndex = [];
+  for (let r = 1; r < booksValues.length; r++) {
+    if (rowsToDelete.indexOf(booksValues[r][idxId]) !== -1) {
+      rowsBySheetIndex.push(r + 1);
+    }
+  }
+  rowsBySheetIndex.sort((a, b) => b - a).forEach(sheetRow => booksSheet.deleteRow(sheetRow));
+
+  return { remapped: Object.keys(idRemap).length, deleted: rowsToDelete.length };
 }
 
 function saveBookLibraries_(bookId, callnoByLibrary) {
@@ -247,6 +365,53 @@ function markFinished(userBookId, readDate) {
 function markDropped(userBookId) {
   updateUserBookField_(userBookId, 'status', '읽음');
   updateUserBookField_(userBookId, 'dropped', true);
+}
+
+function removeUserBook(userBookId) {
+  const sheet = getSheet_(SHEETS.USER_BOOKS);
+  const values = sheet.getDataRange().getValues();
+  for (let r = 1; r < values.length; r++) {
+    if (Number(values[r][0]) === Number(userBookId)) {
+      sheet.deleteRow(r + 1);
+      return true;
+    }
+  }
+  throw new Error('UserBooks id를 찾을 수 없습니다: ' + userBookId);
+}
+
+/**
+ * 복구용: 같은 book_id로 여러 번 등록된 UserBooks 행 중 가장 먼저 추가된 것만 남기고 나머지는 삭제.
+ * status가 서로 다르면(예: 읽고싶음 vs 읽는중) 건드리지 않고, 완전히 같은 book_id+status 조합의 중복만 정리.
+ */
+function dedupeUserBooks() {
+  const sheet = getSheet_(SHEETS.USER_BOOKS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxId = headers.indexOf('id');
+  const idxBookId = headers.indexOf('book_id');
+  const idxStatus = headers.indexOf('status');
+  const idxAdded = headers.indexOf('added_date');
+
+  const rows = values.slice(1).map((row, i) => ({ row, sheetRow: i + 2 }));
+  const seen = {};
+  const toDelete = [];
+  rows
+    .slice()
+    .sort((a, b) => new Date(a.row[idxAdded]) - new Date(b.row[idxAdded]))
+    .forEach(r => {
+      const key = r.row[idxBookId] + '|' + r.row[idxStatus];
+      if (seen[key]) {
+        toDelete.push({ id: r.row[idxId], sheetRow: r.sheetRow });
+      } else {
+        seen[key] = true;
+      }
+    });
+
+  toDelete
+    .sort((a, b) => b.sheetRow - a.sheetRow) // 뒤에서부터 지워야 행 번호가 안 밀림
+    .forEach(d => sheet.deleteRow(d.sheetRow));
+
+  return toDelete.map(d => d.id);
 }
 
 function updateUserBookField_(userBookId, field, value) {
@@ -328,9 +493,13 @@ const API_ACTIONS = {
   markBorrowed_toReading: (p) => markBorrowed_toReading(p.userBookId),
   markFinished: (p) => markFinished(p.userBookId, p.readDate),
   markDropped: (p) => markDropped(p.userBookId),
+  removeUserBook: (p) => removeUserBook(p.userBookId),
+  dedupeUserBooks: () => dedupeUserBooks(),
+  mergeDuplicateBooksByIsbn: () => mergeDuplicateBooksByIsbn(),
   updateBranchOrder: (p) => updateBranchOrder(p.orderedNames),
   syncLibraryBranches: () => syncLibraryBranches(),
   stripBranchSuffixes: () => stripBranchSuffixes(),
+  repairBookTitlesByIsbn: () => repairBookTitlesByIsbn(),
   getVersion: () => APP_VERSION
 };
 

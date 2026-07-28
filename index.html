@@ -149,6 +149,7 @@ main{flex:1;padding:22px 24px 60px;}
 /* ---- 도서관 지점 필터 ---- */
 .branch-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px;}
 .branch-row-spacer{flex:1;min-width:8px;}
+.branch-row .chip-select.dragging{opacity:0.4;}
 .chip-select{
   font-family:var(--sans);font-size:0.82rem;color:var(--ink);
   background:var(--surface);border:1px solid var(--line);border-radius:999px;
@@ -876,6 +877,39 @@ async function loadBranches(){
       });
       row.insertBefore(btn, spacer);
     });
+    initBranchDrag_(row, spacer);
+  }catch(err){ showApiError(err); }
+}
+
+function initBranchDrag_(row, spacer){
+  let dragEl = null;
+  row.querySelectorAll('.chip-select').forEach(btn=>{
+    btn.addEventListener('dragstart', ()=>{
+      dragEl = btn;
+      btn.classList.add('dragging');
+    });
+    btn.addEventListener('dragend', ()=>{
+      btn.classList.remove('dragging');
+      dragEl = null;
+      saveBranchOrder_(row, spacer);
+    });
+  });
+  row.addEventListener('dragover', (e)=>{
+    e.preventDefault();
+    if(!dragEl) return;
+    const after = [...row.querySelectorAll('.chip-select:not(.dragging)')].find(c=>{
+      const rect = c.getBoundingClientRect();
+      return e.clientX < rect.left + rect.width / 2;
+    });
+    if(after) row.insertBefore(dragEl, after);
+    else row.insertBefore(dragEl, spacer);
+  });
+}
+
+async function saveBranchOrder_(row, spacer){
+  const orderedNames = [...row.querySelectorAll('.chip-select')].map(c=>c.textContent);
+  try{
+    await apiPost('updateBranchOrder', { orderedNames });
   }catch(err){ showApiError(err); }
 }
 
