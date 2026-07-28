@@ -1,0 +1,43 @@
+# 읽어용 — 개발 저장 상태 (다른 컴퓨터에서 이어하기용)
+
+## 구성
+- **화면(프론트엔드)**: `index.html` — GitHub Pages로 서빙됨
+  - 배포 주소: https://sshh-sh.github.io/books/
+- **백엔드**: `backend/Code.js`, `backend/appsscript.json`
+  - 실제로는 Google Apps Script 프로젝트에 올라가 있음 (이 폴더의 파일은 백업/참고용 사본)
+  - Apps Script 편집기: https://script.google.com/home/projects/1hB5PE429dgubPXgpwKZTPRF2rvhmDkPfmfqh3CyH6hBsjLcHQ51jmJ8D/edit
+  - 배포된 웹앱(API) 주소: https://script.google.com/macros/s/AKfycbzzNbPguhf1dhI2BGgK_KlvPb154RVUB0khLF-2IpGIwRzqndTVYYk5gOYPhRM_qNa2/exec
+- **데이터**: Google Sheets
+  - 시트 주소: https://docs.google.com/spreadsheets/d/1Ps-E0q3zoxYMkK8S3nfW4_41oWo7z7Ew3uPtFjCuI3c/edit
+  - 탭 구성: `Books`, `BookLibraries`, `UserBooks`, `LibraryBranches`
+
+## API 키 (시트 주인만 볼 수 있는 Apps Script 스크립트 속성에 저장됨, 이 저장소엔 없음)
+- `ALADIN_KEY` — 알라딘 Open API 키
+- `LIBRARY_KEY` — 정보나루(data4library.kr) 인증키
+- 위치: Apps Script 편집기 → 프로젝트 설정(⚙️) → 스크립트 속성
+
+## 다른 컴퓨터에서 개발 이어하기
+1. 이 저장소를 clone
+   ```
+   git clone https://github.com/sshh-sh/books.git
+   ```
+2. **화면 수정**: `index.html` 편집 → git add/commit/push (GitHub Pages가 자동 재배포, 1분 내 반영)
+3. **백엔드 수정**: 두 가지 방법
+   - (A) `script.google.com`에서 위 Apps Script 편집기 링크로 직접 들어가서 브라우저로 코드 수정 (컴퓨터 상관없이 로그인만 하면 됨)
+   - (B) `clasp` CLI 사용 시: Node.js 설치 → `npm install -g @google/clasp` → `clasp login` → `backend/` 폴더를 rootDir로 하는 `.clasp.json` 만들고 `clasp push`
+     ```json
+     {
+       "scriptId": "1hB5PE429dgubPXgpwKZTPRF2rvhmDkPfmfqh3CyH6hBsjLcHQ51jmJ8D",
+       "rootDir": "여기에 backend 폴더 경로"
+     }
+     ```
+   - 백엔드 코드를 고치면 `backend/Code.js`도 같이 업데이트해서 커밋해두면 이 저장소가 항상 최신 상태로 유지됨
+
+## 현재 진행 상황 (2026-07-28 기준)
+- 화면 디자인: 완료 (핑크톤, 잘난체/나눔스퀘어라운드/나눔손글씨 폰트, 4개 탭)
+- 검색→담기, 대출함 체크→읽는중이용 이동, 다읽음/중도포기→읽었어용, 통계: 실제 시트 연동 완료
+- 도서관 지점 동기화(`syncLibraryBranches`) 및 소장/대출 정보 조회(`getBookAvailability`): 정보나루 dtl_region 코드 문제를 주소 필터링 방식으로 수정한 버전을 **배포 중 네트워크 오류로 아직 최종 반영 못함** — 다음 작업 시 `clasp push` 재시도 필요
+- 아직 미구현: 바코드 스캔 실카메라 인식, 사진으로 여러 책 한번에 등록, 청구기호/작가/나라 정렬 콤보의 실제 데이터 연동, 이유 메모 저장(`saveReason`은 현재 미완성)
+
+## 사용한 폰트/이미지 원본 파일
+`C:\Users\종희컴\Desktop\송희\독서앱\` 폴더 안에 원본 폰트(.ttf/.otf), 공룡 이미지가 있음 — index.html에는 이미 base64로 임베딩되어 있어서 없어도 화면엔 문제없지만, 폰트 다시 손볼 일 있으면 참고.
