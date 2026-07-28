@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -338,6 +338,22 @@ function populateAvailabilityCacheForAll() {
   return { done: count, stoppedAt: null, error: null };
 }
 
+/**
+ * 정보나루 할당량이 풀릴 때까지 자동으로 재시도하도록 시간 기반 트리거 설치(1회만 실행하면 됨).
+ * populateAvailabilityCacheForAll은 이미 캐시된 책은 건드리지 않고, 할당량이 막혀있으면
+ * 첫 미조회 책에서 바로 실패하고 끝나기 때문에 매시간 돌려도 API 소모가 거의 없음.
+ */
+function ensureAvailabilityRetryTrigger() {
+  const already = ScriptApp.getProjectTriggers()
+    .some(t => t.getHandlerFunction() === 'populateAvailabilityCacheForAll');
+  if (already) return 'already_exists';
+  ScriptApp.newTrigger('populateAvailabilityCacheForAll')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  return 'created';
+}
+
 /** UserBooks에서 Books에 더 이상 존재하지 않는 book_id를 가리키는 유령 행 삭제 */
 function removeOrphanedUserBooks() {
   const bookIds = sheetToObjects_(getSheet_(SHEETS.BOOKS)).map(b => Number(b.id));
@@ -489,6 +505,10 @@ function markDropped(userBookId) {
   updateUserBookField_(userBookId, 'dropped', true);
 }
 
+function updateReasonNote(userBookId, note) {
+  updateUserBookField_(userBookId, 'reason_note', note || '');
+}
+
 function removeUserBook(userBookId) {
   const sheet = getSheet_(SHEETS.USER_BOOKS);
   const values = sheet.getDataRange().getValues();
@@ -612,6 +632,7 @@ const API_ACTIONS = {
   getBookAvailability: (p) => getBookAvailability(p.isbn13),
   getBookAvailabilityCached: (p) => getBookAvailabilityCached(p.isbn13, p.bookId),
   populateAvailabilityCacheForAll: () => populateAvailabilityCacheForAll(),
+  ensureAvailabilityRetryTrigger: () => ensureAvailabilityRetryTrigger(),
   removeOrphanedUserBooks: () => removeOrphanedUserBooks(),
   debugBookSrchRaw: (p) => debugBookSrchRaw(p.isbn13),
   addToWantList: (p) => addToWantList(p.bookData, p.reasonNote),
@@ -619,6 +640,7 @@ const API_ACTIONS = {
   markBorrowed_toReading: (p) => markBorrowed_toReading(p.userBookId),
   markFinished: (p) => markFinished(p.userBookId, p.readDate),
   markDropped: (p) => markDropped(p.userBookId),
+  updateReasonNote: (p) => updateReasonNote(p.userBookId, p.note),
   removeUserBook: (p) => removeUserBook(p.userBookId),
   dedupeUserBooks: () => dedupeUserBooks(),
   mergeDuplicateBooksByIsbn: () => mergeDuplicateBooksByIsbn(),
