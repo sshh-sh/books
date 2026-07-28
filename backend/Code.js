@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v11';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -303,6 +303,31 @@ function getBookAvailabilityCached(isbn13, bookId) {
   return getBookAvailabilityWithCallNo_(isbn13).libs;
 }
 
+/**
+ * 정보나루 API를 호출하지 않고, 이미 알고 있는 대출가능 정보를 그대로 캐시에 저장.
+ * (API 일일 한도가 막혔을 때, 다른 경로로 이미 확인한 데이터를 수동으로 채워넣는 용도)
+ * libs: [{ libraryName, available }, ...]
+ */
+function seedKnownAvailability(isbn13, libs, callno) {
+  const sheet = getSheet_(SHEETS.BOOKS);
+  ensureBooksAvailColumns_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxIsbn = headers.indexOf('isbn');
+  const idxJson = headers.indexOf('avail_json');
+  const idxChecked = headers.indexOf('avail_checked_at');
+  const idxCallno = headers.indexOf('callno');
+
+  for (let r = 1; r < values.length; r++) {
+    if (String(values[r][idxIsbn]) !== String(isbn13)) continue;
+    sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(libs));
+    sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+    if (callno) sheet.getRange(r + 1, idxCallno + 1).setValue(callno);
+    return { ok: true, bookId: values[r][headers.indexOf('id')] };
+  }
+  return { ok: false, error: 'ISBN을 가진 책을 Books 시트에서 찾을 수 없습니다: ' + isbn13 };
+}
+
 /** 아직 캐시가 없는 책들만 골라서 한 번에 채워넣음 (일괄 등록 직후 등에 1회 실행용) */
 function populateAvailabilityCacheForAll() {
   const sheet = getSheet_(SHEETS.BOOKS);
@@ -438,6 +463,61 @@ function mergeDuplicateBooksByIsbn() {
   rowsBySheetIndex.sort((a, b) => b - a).forEach(sheetRow => booksSheet.deleteRow(sheetRow));
 
   return { remapped: Object.keys(idRemap).length, deleted: rowsToDelete.length };
+}
+
+/* ---------------- 과거 독서기록 일괄 등록 ---------------- */
+
+function itemLookupAladin_(isbn13) {
+  const key = PropertiesService.getScriptProperties().getProperty('ALADIN_KEY');
+  if (!key) throw new Error('ALADIN_KEY가 설정되지 않았습니다.');
+  const url = 'https://www.aladin.co.kr/ttb/api/ItemLookUp.aspx'
+    + '?ttbkey=' + encodeURIComponent(key)
+    + '&itemIdType=ISBN13&ItemId=' + encodeURIComponent(isbn13)
+    + '&output=js&Version=20131101';
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const data = JSON.parse(res.getContentText());
+  if (!data.item || !data.item[0]) return null;
+  const it = data.item[0];
+  return {
+    title: cleanTitle_(it.title),
+    author: it.author,
+    isbn13: it.isbn13,
+    cover: it.cover,
+    category: guessCategory_(it.categoryName),
+    country: ''
+  };
+}
+
+/**
+ * 과거 독서기록(2024~2026 이미지에서 추출한 목록)을 읽었어용에 일괄 등록.
+ * items: [{ title, author, isbn(선택), readDate: 'YYYY-MM-DD', note }]
+ * isbn이 있으면 ItemLookUp으로 정확히 매칭, 없으면 title+author로 검색해 첫 결과 사용.
+ */
+function bulkImportReadBooks(items) {
+  const results = [];
+  (items || []).forEach(item => {
+    try {
+      let bookData = null;
+      if (item.isbn) {
+        try { bookData = itemLookupAladin_(item.isbn); } catch (e) { bookData = null; }
+      }
+      if (!bookData) {
+        const found = searchAladin(((item.title || '') + ' ' + (item.author || '')).trim());
+        if (found && found.length) bookData = found[0];
+      }
+      if (!bookData) {
+        results.push({ title: item.title, ok: false, error: '알라딘에서 못 찾음' });
+        return;
+      }
+      const userBookId = addToReadingList(bookData, item.note || '', '독서기록가져오기');
+      markFinished(userBookId, item.readDate);
+      results.push({ title: bookData.title, ok: true, userBookId: userBookId, isbn: bookData.isbn13, requestedTitle: item.title });
+    } catch (err) {
+      results.push({ title: item.title, ok: false, error: err.message });
+    }
+    Utilities.sleep(150);
+  });
+  return results;
 }
 
 /* ---------------- UserBooks (읽을래용/읽는중이용/읽었어용) ---------------- */
@@ -600,8 +680,10 @@ const API_ACTIONS = {
   getLibraryBranches: () => getLibraryBranches(),
   getBookAvailability: (p) => getBookAvailability(p.isbn13),
   getBookAvailabilityCached: (p) => getBookAvailabilityCached(p.isbn13, p.bookId),
+  seedKnownAvailability: (p) => seedKnownAvailability(p.isbn13, p.libs, p.callno),
   populateAvailabilityCacheForAll: () => populateAvailabilityCacheForAll(),
   removeOrphanedUserBooks: () => removeOrphanedUserBooks(),
+  bulkImportReadBooks: (p) => bulkImportReadBooks(p.items),
   addToWantList: (p) => addToWantList(p.bookData, p.reasonNote),
   addToReadingList: (p) => addToReadingList(p.bookData, p.reasonNote, p.source),
   markBorrowed_toReading: (p) => markBorrowed_toReading(p.userBookId),
