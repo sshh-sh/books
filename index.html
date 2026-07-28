@@ -451,7 +451,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">도서관 정보확인: 0분전 · © 2026 읽어용 · 개발 최송희 · v1</footer>
+  <footer class="site-footer">도서관 정보확인: 0분전 · © 2026 읽어용 · 개발 최송희 · <span id="app-version">v...</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용) -->
@@ -923,6 +923,7 @@ loadReading();
 loadDone();
 loadStats();
 loadBranches();
+apiGet('getVersion').then(v => { document.getElementById('app-version').textContent = v; }).catch(()=>{});
 </script>
 
 </body>

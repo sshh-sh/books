@@ -11,6 +11,12 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
+const APP_VERSION = 'v5';
+
+function stripDoseogwan_(name) {
+  return (name || '').replace(/도서관$/, '');
+}
+
 const YONGIN_REGION_CODE = '31'; // 정보나루 지역코드: 경기도
 const YONGIN_DTL_CODE = '31018'; // 정보나루 상세지역코드: 용인시 (실제 값은 정보나루 문서에서 재확인 필요)
 
@@ -116,8 +122,17 @@ function syncLibraryBranches() {
   if (existing.length > 0) return; // 이미 있으면 건드리지 않음(순서 보존)
   const libs = fetchYonginBranches_();
   libs.forEach((lib, i) => {
-    sheet.appendRow([lib.libName, i + 1]);
+    sheet.appendRow([stripDoseogwan_(lib.libName), i + 1]);
   });
+}
+
+/** 마이그레이션용: 이미 채워진 지점명에서 "도서관" 접미사만 제거 */
+function stripBranchSuffixes() {
+  const sheet = getSheet_(SHEETS.BRANCHES);
+  const rows = sheetToObjects_(sheet);
+  if (!rows.length) return;
+  const out = rows.map(r => [stripDoseogwan_(r.branch_name), r.sort_order]);
+  sheet.getRange(2, 1, out.length, 2).setValues(out);
 }
 
 function getLibraryBranches() {
@@ -167,7 +182,7 @@ function getBookAvailability(isbn13) {
       const existData = JSON.parse(existRes.getContentText());
       available = existData.response.result.loanAvailable === 'Y';
     } catch (err) { /* 개별 조회 실패는 무시하고 대출불가로 처리 */ }
-    return { libraryName: l.libName, available: available };
+    return { libraryName: stripDoseogwan_(l.libName), available: available };
   });
 }
 
@@ -314,7 +329,9 @@ const API_ACTIONS = {
   markFinished: (p) => markFinished(p.userBookId, p.readDate),
   markDropped: (p) => markDropped(p.userBookId),
   updateBranchOrder: (p) => updateBranchOrder(p.orderedNames),
-  syncLibraryBranches: () => syncLibraryBranches()
+  syncLibraryBranches: () => syncLibraryBranches(),
+  stripBranchSuffixes: () => stripBranchSuffixes(),
+  getVersion: () => APP_VERSION
 };
 
 function jsonOutput_(obj) {
