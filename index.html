@@ -75,13 +75,17 @@ header.top .brand-sub{
 }
 
 nav.tabs{
-  display:flex;align-items:center;gap:10px;padding:0 24px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:2px;padding:0 24px;border-bottom:1px solid var(--line);
   overflow-x:auto;position:sticky;top:0;z-index:8;background:var(--bg);
 }
 nav.tabs button.tab-btn{
   appearance:none;border:none;background:none;color:var(--ink-soft);
-  font-family:var(--title-font);font-size:1.02rem;padding:14px 16px;cursor:pointer;
+  font-family:var(--title-font);font-size:0.92rem;padding:12px 14px;cursor:pointer;
   border-bottom:2px solid transparent;white-space:nowrap;font-weight:normal;
+}
+@media (min-width:900px){
+  nav.tabs{gap:10px;}
+  nav.tabs button.tab-btn{font-size:1.02rem;padding:14px 16px;}
 }
 nav.tabs button.tab-btn.active{color:var(--ink);border-bottom-color:var(--accent);}
 nav.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
