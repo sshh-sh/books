@@ -166,6 +166,9 @@ main{flex:1;padding:22px 24px 60px;}
   padding:7px 12px;cursor:pointer;
 }
 .more-branch-btn:hover{border-color:var(--accent);color:var(--accent);}
+.count-chip{
+  cursor:default;color:var(--ink-soft);background:var(--bg);margin-left:auto;
+}
 
 .list-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;}
 .want-count{font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);white-space:nowrap;}
@@ -203,7 +206,7 @@ main{flex:1;padding:22px 24px 60px;}
   padding:8px;display:flex;flex-direction:column;gap:6px;cursor:pointer;transition:border-color .15s;position:relative;
 }
 .book-card .cover-col{width:100%;}
-.book-card .cover{width:100%;height:auto;aspect-ratio:2/3;}
+.book-card .cover{width:64%;max-width:90px;height:auto;aspect-ratio:2/3;margin:0 auto;}
 .book-card:hover{border-color:var(--accent);}
 .book-card .kebab-wrap{position:absolute;top:8px;right:8px;}
 .kebab-btn{
@@ -447,14 +450,6 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
 
       <div class="branch-row" id="branch-row"></div>
-      <div class="list-toolbar">
-        <span class="want-count" id="want-count"></span>
-        <select class="sort-combo" id="sort-combo" onchange="applyComboSort(this.value)">
-          <option value="callno">청구기호순</option>
-          <option value="author">작가별</option>
-          <option value="country">나라별</option>
-        </select>
-      </div>
 
       <div class="book-grid" id="book-grid">
         <div class="empty-msg">불러오는 중...</div>
@@ -720,7 +715,7 @@ let activeBranchFilter = null; // null이면 전체
 
 function renderWantCount(){
   const el = document.getElementById('want-count');
-  if(el) el.textContent = wantCache.length + '권 등록';
+  if(el) el.textContent = '읽고 싶은 책 ' + wantCache.length + '권';
 }
 
 function wantCardHtml(b){
@@ -759,16 +754,24 @@ async function loadWant(){
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">아직 담은 책이 없어요. 위에서 검색해서 담아보세요.</div>'; return; }
     grid.innerHTML = list.map(wantCardHtml).join('');
     applyBranchFilter();
-    loadAvailabilityQueued_(list);
+    setupAvailLazyLoad_();
   }catch(err){ showApiError(err); grid.innerHTML = '<div class="empty-msg">불러오지 못했어요.</div>'; }
 }
-/* 한꺼번에 다 쏘면 브라우저/Apps Script 동시요청 한도에 걸려 "Failed to fetch"가 나므로,
-   3개씩 묶어서 순차적으로 요청 (캐시가 이미 있는 책은 백엔드에서 바로 반환되니 실제로는 대부분 빠르게 끝남) */
-async function loadAvailabilityQueued_(list){
-  const BATCH = 3;
-  for(let i=0; i<list.length; i+=BATCH){
-    await Promise.all(list.slice(i, i+BATCH).map(b => loadAvailability(b)));
-  }
+/* 94권 전체를 한꺼번에 조회하면 네트워크가 몰려서 다른 동작(체크박스 등)이 느려지고
+   "Failed to fetch"도 나므로, 화면에 실제로 보이는(또는 곧 보일) 카드만 그때그때 조회 */
+let availObserver_ = null;
+function setupAvailLazyLoad_(){
+  if(availObserver_) availObserver_.disconnect();
+  availObserver_ = new IntersectionObserver((entries)=>{
+    entries.forEach(entry=>{
+      if(!entry.isIntersecting) return;
+      const card = entry.target;
+      const b = findWantBook_(card.dataset.userBookId);
+      if(b) loadAvailability(b);
+      availObserver_.unobserve(card);
+    });
+  }, { rootMargin: '300px', threshold: 0.01 });
+  document.querySelectorAll('#book-grid .book-card').forEach(card => availObserver_.observe(card));
 }
 async function loadAvailability(b){
   const box = document.getElementById('avail-'+b.userBook.id);
@@ -1037,17 +1040,51 @@ function renderBranchRow_(){
   moreBtn.addEventListener('click', ()=>{ branchListExpanded = !branchListExpanded; renderBranchRow_(); });
   row.appendChild(moreBtn);
 
+  const countChip = document.createElement('span');
+  countChip.className = 'chip-select count-chip';
+  countChip.id = 'want-count';
+  row.appendChild(countChip);
+  renderWantCount();
+
   if(branchListExpanded) initBranchDrag_(row);
 }
 
+function findWantBook_(userBookId){
+  return wantCache.find(b => String(b.userBook.id) === String(userBookId));
+}
+function callnoCompare_(a, b){
+  if(!a && !b) return 0;
+  if(!a) return 1;
+  if(!b) return -1;
+  return a.localeCompare(b, undefined, {numeric:true});
+}
+/* 전체(필터 없음)일 땐 최근 추가한 책이 맨 앞, 특정 도서관 필터일 땐 그 도서관 보유 책만 청구기호순으로 정렬.
+   카드 DOM은 재사용(appendChild로 순서만 옮김)해서 이미 불러온 도서관 정보 표시가 지워지지 않게 함 */
 function applyBranchFilter(){
-  document.querySelectorAll('#book-grid .book-card').forEach(card=>{
-    if(activeBranchFilter === null){ card.style.display = ''; return; }
-    const bookId = card.dataset.bookId;
-    const libs = bookLibrariesMap[bookId];
+  const grid = document.getElementById('book-grid');
+  const cards = [...grid.querySelectorAll('.book-card')];
+
+  if(activeBranchFilter === null){
+    cards.forEach(c=>{ c.style.display = ''; });
+    cards.sort((c1,c2)=>{
+      const b1 = findWantBook_(c1.dataset.userBookId), b2 = findWantBook_(c2.dataset.userBookId);
+      return new Date((b2&&b2.userBook.added_date)||0) - new Date((b1&&b1.userBook.added_date)||0);
+    });
+    cards.forEach(c=>grid.appendChild(c));
+    return;
+  }
+
+  cards.forEach(card=>{
+    const libs = bookLibrariesMap[card.dataset.bookId];
     const owns = Array.isArray(libs) && libs.indexOf(activeBranchFilter) !== -1;
     card.style.display = owns ? '' : 'none';
   });
+  const visible = cards.filter(c=>c.style.display !== 'none');
+  visible.sort((c1,c2)=>{
+    const b1 = findWantBook_(c1.dataset.userBookId), b2 = findWantBook_(c2.dataset.userBookId);
+    return callnoCompare_((b1&&b1.callno)||'', (b2&&b2.callno)||'');
+  });
+  visible.forEach(c=>grid.appendChild(c));
 }
 
 function initBranchDrag_(row){
@@ -1095,12 +1132,6 @@ async function saveBranchOrder_(row){
 }
 
 /* ============ 정렬 콤보 ============ */
-function applyComboSort(mode){
-  const grid = document.getElementById('book-grid');
-  const cards = [...grid.querySelectorAll('.book-card')];
-  cards.forEach(c=>grid.appendChild(c)); // 실제 정렬은 book 데이터에 callno/author 등이 준비되면 확장 예정
-}
-
 /* ============ 상세 모달(정보 표시만) ============ */
 function openDetail(){ document.getElementById('detail-overlay').classList.add('active'); }
 function closeDetail(){ document.getElementById('detail-overlay').classList.remove('active'); }
