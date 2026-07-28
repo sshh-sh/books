@@ -147,8 +147,8 @@ main{flex:1;padding:22px 24px 60px;}
 }
 
 /* ---- 도서관 지점 필터 ---- */
-.branch-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px;}
-.branch-row-spacer{flex:1;min-width:8px;}
+.branch-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;}
+.branch-row-spacer{display:none;}
 .branch-row .chip-select.dragging{opacity:0.4;}
 .chip-select{
   font-family:var(--sans);font-size:0.82rem;color:var(--ink);
@@ -158,6 +158,15 @@ main{flex:1;padding:22px 24px 60px;}
 .chip-select.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
 .chip-select.dragging{opacity:0.4;}
 .chip-select.drag-over{border-color:var(--accent);border-style:dashed;}
+.more-branch-btn{
+  font-family:var(--sans);font-size:0.82rem;color:var(--ink-soft);
+  background:none;border:1px dashed var(--line);border-radius:999px;
+  padding:7px 12px;cursor:pointer;
+}
+.more-branch-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+.list-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;}
+.want-count{font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);white-space:nowrap;}
 
 .sort-row{margin-bottom:14px;}
 .sort-toggle{
@@ -171,6 +180,19 @@ main{flex:1;padding:22px 24px 60px;}
   background:var(--surface);border:1px solid var(--line);border-radius:999px;
   padding:6px 10px;cursor:pointer;
 }
+
+/* ---- 맨 위/아래 이동 버튼 ---- */
+.scroll-nav{
+  position:fixed;right:10px;top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:6px;z-index:50;
+}
+.scroll-nav button{
+  width:30px;height:30px;border-radius:50%;
+  background:var(--surface);border:1px solid var(--line);color:var(--ink-soft);
+  font-size:0.75rem;line-height:1;cursor:pointer;opacity:0.75;
+  display:flex;align-items:center;justify-content:center;
+}
+.scroll-nav button:hover{opacity:1;border-color:var(--accent);color:var(--accent);}
 
 /* ---- 책 카드 (읽을래용) ---- */
 .book-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;}
@@ -253,10 +275,18 @@ main{flex:1;padding:22px 24px 60px;}
 .month-header .m-bar-fill{height:100%;background:var(--accent);}
 
 .tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:16px 12px;}
-.record-tile{cursor:pointer;text-align:center;}
+.record-tile{cursor:pointer;text-align:center;position:relative;}
 .record-tile .cover{
   width:100%;height:auto;aspect-ratio:2/3;position:relative;font-size:0.6rem;border-radius:6px;
 }
+.tile-remove-btn{
+  position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;z-index:2;
+  background:var(--surface);border:1px solid var(--line);color:var(--ink-soft);
+  font-size:0.7rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  opacity:0;transition:opacity .1s;
+}
+.record-tile:hover .tile-remove-btn{opacity:1;}
+.tile-remove-btn:hover{border-color:var(--danger);color:var(--danger);}
 .record-tile .memo-flag{position:absolute;top:3px;right:3px;font-size:0.8rem;filter:drop-shadow(0 1px 1px rgba(0,0,0,0.25));}
 .record-tile .r-title{
   font-size:0.74rem;font-weight:700;margin-top:6px;line-height:1.25;
@@ -373,6 +403,11 @@ main{flex:1;padding:22px 24px 60px;}
 </head>
 <body>
 
+<div class="scroll-nav">
+  <button onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="맨 위로">▲</button>
+  <button onclick="window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'})" aria-label="맨 아래로">▼</button>
+</div>
+
 <div class="app">
   <header class="top">
     <button class="brand-link" onclick="location.reload()">
@@ -405,8 +440,9 @@ main{flex:1;padding:22px 24px 60px;}
         <div class="search-results" id="search-results" style="display:none;"></div>
       </div>
 
-      <div class="branch-row" id="branch-row">
-        <span class="branch-row-spacer"></span>
+      <div class="branch-row" id="branch-row"></div>
+      <div class="list-toolbar">
+        <span class="want-count" id="want-count"></span>
         <select class="sort-combo" id="sort-combo" onchange="applyComboSort(this.value)">
           <option value="callno">청구기호순</option>
           <option value="author">작가별</option>
@@ -669,30 +705,50 @@ async function addWant(i){
 
 /* ============ 읽을래용: 목록 ============ */
 let wantCache = [];
+let bookLibrariesMap = {}; // book_id -> ['남사','수지',...] (보유 도서관 이름 목록, 필터용)
+let activeBranchFilter = null; // null이면 전체
+
+function renderWantCount(){
+  const el = document.getElementById('want-count');
+  if(el) el.textContent = wantCache.length + '권 등록';
+}
+
+function wantCardHtml(b){
+  return `
+    <div class="book-card" data-user-book-id="${b.userBook.id}" data-book-id="${b.id}">
+      <div class="cover-col">
+        <img class="cover" src="${b.cover_url||''}" alt="">
+        <label class="borrow-check" onclick="event.stopPropagation()">
+          <input type="checkbox" onchange="borrowThis(${b.userBook.id}, this)"> 대출함
+        </label>
+        <div class="kebab-wrap">
+          <button class="kebab-btn" onclick="event.stopPropagation();toggleKebab(this)">⋯</button>
+          <div class="kebab-menu">
+            <button class="danger-opt" onclick="removeWantThis(${b.userBook.id}, this)">삭제</button>
+          </div>
+        </div>
+      </div>
+      <div class="book-meta">
+        <div class="book-title">${escapeHtml(b.title)}</div>
+        <div class="book-author-year">${escapeHtml(b.author)}</div>
+        <div class="avail-lines" id="avail-${b.userBook.id}"><div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보 확인 중...</div></div>
+        <div class="reason-input">
+          <textarea rows="2" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 async function loadWant(){
   const grid = document.getElementById('book-grid');
   try{
     const list = await apiGet('getWantList');
     wantCache = list;
+    renderWantCount();
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">아직 담은 책이 없어요. 위에서 검색해서 담아보세요.</div>'; return; }
-    grid.innerHTML = list.map(b => `
-      <div class="book-card">
-        <div class="cover-col">
-          <img class="cover" src="${b.cover_url||''}" alt="">
-          <label class="borrow-check" onclick="event.stopPropagation()">
-            <input type="checkbox" onchange="borrowThis(${b.userBook.id}, this)"> 대출함
-          </label>
-        </div>
-        <div class="book-meta">
-          <div class="book-title">${escapeHtml(b.title)}</div>
-          <div class="book-author-year">${escapeHtml(b.author)}</div>
-          <div class="avail-lines" id="avail-${b.userBook.id}"><div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보 확인 중...</div></div>
-          <div class="reason-input">
-            <textarea rows="2" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
-          </div>
-        </div>
-      </div>
-    `).join('');
+    grid.innerHTML = list.map(wantCardHtml).join('');
+    applyBranchFilter();
     list.forEach(b => loadAvailability(b));
   }catch(err){ showApiError(err); grid.innerHTML = '<div class="empty-msg">불러오지 못했어요.</div>'; }
 }
@@ -701,22 +757,44 @@ async function loadAvailability(b){
   if(!box) return;
   if(!b.isbn){ box.innerHTML = ''; return; }
   try{
-    const libs = await apiGet('getBookAvailability', { isbn13: b.isbn });
-    if(!libs.length){ box.innerHTML = '<div><span class="al-label">보유도서관</span> 없음</div>'; return; }
+    const libs = await apiGet('getBookAvailabilityCached', { isbn13: b.isbn, bookId: b.id });
+    bookLibrariesMap[b.id] = libs.map(l=>l.libraryName);
+    if(!libs.length){ box.innerHTML = '<div><span class="al-label">보유도서관</span> 없음</div>'; applyBranchFilter(); return; }
     const owned = libs.map(l=>l.libraryName).join(', ');
     const available = libs.filter(l=>l.available).map(l=>l.libraryName);
     box.innerHTML = `
       <div><span class="al-label">보유도서관</span> ${escapeHtml(owned)}</div>
       <div><span class="al-label">대출가능</span> ${available.length ? escapeHtml(available.join(', ')) : '없음'}</div>
     `;
-  }catch(err){ box.innerHTML = ''; }
+    applyBranchFilter();
+  }catch(err){ box.innerHTML = '<div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보를 못 불러왔어요.</div>'; }
 }
 async function borrowThis(userBookId, checkbox){
   checkbox.disabled = true;
+  const card = checkbox.closest('.book-card');
+  if(card) card.style.display = 'none'; // 즉시 화면에서 숨김(결과 기다리는 동안 어색하게 남아있지 않도록)
   try{
     await apiPost('markBorrowed_toReading', { userBookId });
-    loadWant(); loadReading();
-  }catch(err){ showApiError(err); checkbox.disabled=false; }
+    wantCache = wantCache.filter(b => b.userBook.id !== userBookId);
+    renderWantCount();
+    if(card) card.remove();
+    loadReading();
+  }catch(err){
+    showApiError(err);
+    checkbox.disabled=false; checkbox.checked=false;
+    if(card) card.style.display = '';
+  }
+}
+async function removeWantThis(userBookId, btn){
+  btn.closest('.kebab-menu').classList.remove('open');
+  if(!confirm('이 책을 목록에서 삭제할까요?')) return;
+  const card = btn.closest('.book-card');
+  try{
+    await apiPost('removeUserBook', { userBookId });
+    wantCache = wantCache.filter(b => b.userBook.id !== userBookId);
+    renderWantCount();
+    if(card) card.remove();
+  }catch(err){ showApiError(err); }
 }
 function saveReason(userBookId, value){
   // 참고용 표시만: 이유 메모 업데이트 API는 추후 추가 예정
@@ -739,6 +817,7 @@ async function loadReading(){
             <button class="kebab-btn" onclick="event.stopPropagation();toggleKebab(this)">⋯</button>
             <div class="kebab-menu">
               <button class="danger-opt" onclick="dropThis(${b.userBook.id}, this)">중도포기로 표시</button>
+              <button class="danger-opt" onclick="removeReadingThis(${b.userBook.id}, this)">삭제</button>
             </div>
           </div>
         </div>
@@ -776,6 +855,14 @@ async function dropThis(userBookId, btn){
     loadReading(); loadDone(); loadStats();
   }catch(err){ showApiError(err); }
 }
+async function removeReadingThis(userBookId, btn){
+  btn.closest('.kebab-menu').classList.remove('open');
+  if(!confirm('이 책을 목록에서 삭제할까요?')) return;
+  try{
+    await apiPost('removeUserBook', { userBookId });
+    loadReading();
+  }catch(err){ showApiError(err); }
+}
 function openNewBook(){ document.getElementById('newbook-overlay').classList.add('active'); }
 function closeNewBook(){ document.getElementById('newbook-overlay').classList.remove('active'); }
 async function submitOutsideBook(){
@@ -809,6 +896,7 @@ async function loadDone(){
       const label = key === '중도포기' ? '중도포기' : (key.slice(0,4)+'년 '+parseInt(key.slice(5,7),10)+'월');
       const tiles = groups[key].map(b=>`
         <div class="record-tile ${b.userBook.dropped?'dropped':''}">
+          <button class="tile-remove-btn" title="삭제" onclick="event.stopPropagation();removeDoneThis(${b.userBook.id})">×</button>
           <img class="cover" src="${b.cover_url||''}" alt="">
           <div class="r-title">${escapeHtml(b.title)}</div>
           <div class="r-date">${b.userBook.dropped ? '중도포기' : (b.userBook.read_date||'').slice(5).replace('-','.')}</div>
@@ -820,6 +908,13 @@ async function loadDone(){
       </div>`;
     }).join('');
   }catch(err){ showApiError(err); box.innerHTML = '<div class="empty-msg">불러오지 못했어요.</div>'; }
+}
+async function removeDoneThis(userBookId){
+  if(!confirm('이 책 기록을 삭제할까요?')) return;
+  try{
+    await apiPost('removeUserBook', { userBookId });
+    loadDone(); loadStats();
+  }catch(err){ showApiError(err); }
 }
 
 /* ============ 종합해용 ============ */
@@ -854,36 +949,71 @@ async function loadStats(){
 }
 
 /* ============ 도서관 지점 (읽을래용 필터) ============ */
+const ALWAYS_VISIBLE_BRANCHES = ['남사','용인중앙'];
+let branchListExpanded = false;
+let branchNamesCache = [];
+
 async function loadBranches(){
   const row = document.getElementById('branch-row');
-  const spacer = row.querySelector('.branch-row-spacer');
   try{
     const branches = await apiGet('getLibraryBranches');
     if(!branches.length){
       const note = document.createElement('span');
       note.className = 'branch-hint';
       note.textContent = '도서관 지점 목록이 아직 동기화되지 않았어요.';
-      row.insertBefore(note, spacer);
+      row.appendChild(note);
       return;
     }
-    branches.forEach((b,i)=>{
-      const btn = document.createElement('button');
-      btn.className = 'chip-select' + (i===0 ? ' active' : '');
-      btn.textContent = b.branch_name;
-      btn.draggable = true;
-      btn.addEventListener('click', ()=>{
-        row.querySelectorAll('.chip-select').forEach(c=>c.classList.remove('active'));
-        btn.classList.add('active');
-      });
-      row.insertBefore(btn, spacer);
-    });
-    initBranchDrag_(row, spacer);
+    branchNamesCache = branches.map(b=>b.branch_name);
+    renderBranchRow_();
   }catch(err){ showApiError(err); }
 }
 
-function initBranchDrag_(row, spacer){
+function renderBranchRow_(){
+  const row = document.getElementById('branch-row');
+  row.innerHTML = '';
+
+  const allBtn = document.createElement('button');
+  allBtn.className = 'chip-select' + (activeBranchFilter===null ? ' active' : '');
+  allBtn.textContent = '전체';
+  allBtn.addEventListener('click', ()=>{ activeBranchFilter = null; renderBranchRow_(); applyBranchFilter(); });
+  row.appendChild(allBtn);
+
+  const toShow = branchListExpanded
+    ? branchNamesCache
+    : branchNamesCache.filter(n => ALWAYS_VISIBLE_BRANCHES.indexOf(n) !== -1);
+
+  toShow.forEach(name=>{
+    const btn = document.createElement('button');
+    btn.className = 'chip-select' + (activeBranchFilter===name ? ' active' : '');
+    btn.textContent = name;
+    btn.draggable = true;
+    btn.addEventListener('click', ()=>{ activeBranchFilter = name; renderBranchRow_(); applyBranchFilter(); });
+    row.appendChild(btn);
+  });
+
+  const moreBtn = document.createElement('button');
+  moreBtn.className = 'more-branch-btn';
+  moreBtn.textContent = branchListExpanded ? '접기' : '더보기';
+  moreBtn.addEventListener('click', ()=>{ branchListExpanded = !branchListExpanded; renderBranchRow_(); });
+  row.appendChild(moreBtn);
+
+  if(branchListExpanded) initBranchDrag_(row);
+}
+
+function applyBranchFilter(){
+  document.querySelectorAll('#book-grid .book-card').forEach(card=>{
+    if(activeBranchFilter === null){ card.style.display = ''; return; }
+    const bookId = card.dataset.bookId;
+    const libs = bookLibrariesMap[bookId];
+    const owns = Array.isArray(libs) && libs.indexOf(activeBranchFilter) !== -1;
+    card.style.display = owns ? '' : 'none';
+  });
+}
+
+function initBranchDrag_(row){
   let dragEl = null;
-  row.querySelectorAll('.chip-select').forEach(btn=>{
+  row.querySelectorAll('.chip-select[draggable="true"]').forEach(btn=>{
     btn.addEventListener('dragstart', ()=>{
       dragEl = btn;
       btn.classList.add('dragging');
@@ -891,25 +1021,37 @@ function initBranchDrag_(row, spacer){
     btn.addEventListener('dragend', ()=>{
       btn.classList.remove('dragging');
       dragEl = null;
-      saveBranchOrder_(row, spacer);
+      saveBranchOrder_(row);
     });
   });
   row.addEventListener('dragover', (e)=>{
     e.preventDefault();
     if(!dragEl) return;
-    const after = [...row.querySelectorAll('.chip-select:not(.dragging)')].find(c=>{
+    // X, Y 둘 다 고려해서 가장 가까운 칩 옆으로 옮김(줄바꿈 있어도 정상 동작하도록)
+    const candidates = [...row.querySelectorAll('.chip-select[draggable="true"]:not(.dragging)')];
+    let closest = null, closestDist = Infinity, closestBefore = true;
+    candidates.forEach(c=>{
       const rect = c.getBoundingClientRect();
-      return e.clientX < rect.left + rect.width / 2;
+      const cx = rect.left + rect.width/2;
+      const cy = rect.top + rect.height/2;
+      const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+      if(dist < closestDist){
+        closestDist = dist;
+        closest = c;
+        closestBefore = e.clientX < cx;
+      }
     });
-    if(after) row.insertBefore(dragEl, after);
-    else row.insertBefore(dragEl, spacer);
+    if(!closest) return;
+    if(closestBefore) row.insertBefore(dragEl, closest);
+    else row.insertBefore(dragEl, closest.nextSibling);
   });
 }
 
-async function saveBranchOrder_(row, spacer){
-  const orderedNames = [...row.querySelectorAll('.chip-select')].map(c=>c.textContent);
+async function saveBranchOrder_(row){
+  const orderedNames = [...row.querySelectorAll('.chip-select[draggable="true"]')].map(c=>c.textContent);
   try{
     await apiPost('updateBranchOrder', { orderedNames });
+    branchNamesCache = orderedNames;
   }catch(err){ showApiError(err); }
 }
 

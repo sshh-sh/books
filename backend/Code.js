@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -200,6 +200,32 @@ function updateBranchOrder(orderedNames) {
 
 /* ---------------- 정보나루: 도서 소장/대출 여부 ---------------- */
 
+function debugBookSrchRaw(isbn13) {
+  const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
+  if (!key) throw new Error('LIBRARY_KEY가 설정되지 않았습니다.');
+  const srchUrl = 'http://data4library.kr/api/libSrchByBook'
+    + '?authKey=' + encodeURIComponent(key)
+    + '&isbn=' + encodeURIComponent(isbn13)
+    + '&region=' + YONGIN_REGION_CODE
+    + '&pageSize=500&format=json';
+  const srchRes = UrlFetchApp.fetch(srchUrl, { muteHttpExceptions: true });
+  const raw = srchRes.getContentText();
+
+  const noRegionUrl = 'http://data4library.kr/api/libSrchByBook'
+    + '?authKey=' + encodeURIComponent(key)
+    + '&isbn=' + encodeURIComponent(isbn13)
+    + '&pageSize=500&format=json';
+  const noRegionRes = UrlFetchApp.fetch(noRegionUrl, { muteHttpExceptions: true });
+  const noRegionData = JSON.parse(noRegionRes.getContentText());
+  const allLibs = (noRegionData.response && noRegionData.response.libs) || [];
+
+  return {
+    withRegionRaw: raw,
+    noRegionCount: allLibs.length,
+    noRegionSample: allLibs.slice(0, 20).map(l => ({ name: l.lib.libName, address: l.lib.address, region: l.lib.region }))
+  };
+}
+
 function getBookAvailability(isbn13) {
   const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
   if (!key) throw new Error('LIBRARY_KEY가 설정되지 않았습니다.');
@@ -212,6 +238,9 @@ function getBookAvailability(isbn13) {
     + '&pageSize=500&format=json';
   const srchRes = UrlFetchApp.fetch(srchUrl, { muteHttpExceptions: true });
   const srchData = JSON.parse(srchRes.getContentText());
+  if (srchData.response && srchData.response.errCode) {
+    throw new Error('정보나루 API 오류: ' + srchData.response.error);
+  }
   const allLibs = (srchData.response && srchData.response.libs) || [];
   const yonginLibs = allLibs
     .map(l => l.lib)
@@ -232,6 +261,99 @@ function getBookAvailability(isbn13) {
     } catch (err) { /* 개별 조회 실패는 무시하고 대출불가로 처리 */ }
     return { libraryName: stripDoseogwan_(l.libName), available: available };
   });
+}
+
+const AVAIL_CACHE_DAYS = 365;
+
+function ensureBooksAvailColumns_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  ['avail_json', 'avail_checked_at'].forEach(h => {
+    if (headers.indexOf(h) === -1) {
+      const newCol = sheet.getLastColumn() + 1;
+      sheet.getRange(1, newCol).setValue(h);
+    }
+  });
+}
+
+/**
+ * 도서관 보유/대출가능 여부를 book_id 기준으로 캐싱해서 반환.
+ * 캐시가 없거나 AVAIL_CACHE_DAYS(1년)보다 오래됐을 때만 실제 정보나루 API를 호출함
+ * → 하루 호출량 한도(500건)를 목록 조회만으로 다 써버리는 문제를 방지.
+ */
+function getBookAvailabilityCached(isbn13, bookId) {
+  const sheet = getSheet_(SHEETS.BOOKS);
+  ensureBooksAvailColumns_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxId = headers.indexOf('id');
+  const idxJson = headers.indexOf('avail_json');
+  const idxChecked = headers.indexOf('avail_checked_at');
+
+  for (let r = 1; r < values.length; r++) {
+    if (Number(values[r][idxId]) !== Number(bookId)) continue;
+
+    const checkedAt = values[r][idxChecked];
+    const cachedJson = values[r][idxJson];
+    const isFresh = checkedAt && cachedJson &&
+      (new Date() - new Date(checkedAt)) < AVAIL_CACHE_DAYS * 24 * 60 * 60 * 1000;
+    if (isFresh) {
+      try { return JSON.parse(cachedJson); } catch (e) { /* 캐시 파싱 실패 시 새로 조회 */ }
+    }
+
+    const fresh = getBookAvailability(isbn13);
+    sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh));
+    sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+    return fresh;
+  }
+  return getBookAvailability(isbn13);
+}
+
+/** 아직 캐시가 없는 책들만 골라서 한 번에 채워넣음 (일괄 등록 직후 등에 1회 실행용) */
+function populateAvailabilityCacheForAll() {
+  const sheet = getSheet_(SHEETS.BOOKS);
+  ensureBooksAvailColumns_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxId = headers.indexOf('id');
+  const idxIsbn = headers.indexOf('isbn');
+  const idxJson = headers.indexOf('avail_json');
+  const idxChecked = headers.indexOf('avail_checked_at');
+  let count = 0;
+
+  for (let r = 1; r < values.length; r++) {
+    if (values[r][idxJson] && values[r][idxChecked]) continue; // 이미 캐시 있음
+    const isbn = values[r][idxIsbn];
+    if (!isbn) continue;
+    try {
+      const fresh = getBookAvailability(isbn);
+      sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh));
+      sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+      count++;
+    } catch (err) {
+      return { done: count, stoppedAt: values[r][idxId], error: err.message };
+    }
+    Utilities.sleep(200);
+  }
+  return { done: count, stoppedAt: null, error: null };
+}
+
+/** UserBooks에서 Books에 더 이상 존재하지 않는 book_id를 가리키는 유령 행 삭제 */
+function removeOrphanedUserBooks() {
+  const bookIds = sheetToObjects_(getSheet_(SHEETS.BOOKS)).map(b => Number(b.id));
+  const sheet = getSheet_(SHEETS.USER_BOOKS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxBookId = headers.indexOf('book_id');
+  const idxId = headers.indexOf('id');
+  const removed = [];
+  for (let r = 1; r < values.length; r++) {
+    if (bookIds.indexOf(Number(values[r][idxBookId])) === -1) {
+      removed.push({ row: r + 1, id: values[r][idxId] });
+    }
+  }
+  removed.sort((a, b) => b.row - a.row).forEach(x => sheet.deleteRow(x.row));
+  return removed.map(x => x.id);
 }
 
 /* ---------------- Books / BookLibraries ---------------- */
@@ -488,6 +610,10 @@ const API_ACTIONS = {
   getStats: () => getStats(),
   getLibraryBranches: () => getLibraryBranches(),
   getBookAvailability: (p) => getBookAvailability(p.isbn13),
+  getBookAvailabilityCached: (p) => getBookAvailabilityCached(p.isbn13, p.bookId),
+  populateAvailabilityCacheForAll: () => populateAvailabilityCacheForAll(),
+  removeOrphanedUserBooks: () => removeOrphanedUserBooks(),
+  debugBookSrchRaw: (p) => debugBookSrchRaw(p.isbn13),
   addToWantList: (p) => addToWantList(p.bookData, p.reasonNote),
   addToReadingList: (p) => addToReadingList(p.bookData, p.reasonNote, p.source),
   markBorrowed_toReading: (p) => markBorrowed_toReading(p.userBookId),
