@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -674,11 +674,19 @@ function addToReadingList(bookData, reasonNote, source) {
   return id;
 }
 
-/** 검색으로 고른 책을 곧바로 읽었어용(다 읽은 상태)으로 등록 */
+/**
+ * 검색으로 고른 책을 곧바로 읽었어용(다 읽은 상태)으로 등록.
+ * appendRow(읽는중으로 추가) 후 updateUserBookField_를 2번(상태, 날짜) 더 호출하던 이전 방식은
+ * 매번 UserBooks 시트 전체를 다시 읽고 셀을 하나씩 쓰는 왕복이 3번 발생해서 느렸음.
+ * 처음부터 최종 상태(읽음+날짜)로 한 줄만 추가하도록 바꿔서 왕복 횟수를 1번으로 줄임.
+ */
 function addFinishedBookDirect(bookData, note, readDate) {
-  const userBookId = addToReadingList(bookData, note || '', '도서관외');
-  markFinished(userBookId, readDate);
-  return userBookId;
+  const bookId = findOrCreateBook_(bookData);
+  const sheet = getSheet_(SHEETS.USER_BOOKS);
+  const id = nextId_(sheet);
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  sheet.appendRow([id, bookId, '읽음', '도서관외', today, readDate, false, note || '']);
+  return id;
 }
 
 function markBorrowed_toReading(userBookId) {
