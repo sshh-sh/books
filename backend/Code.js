@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -304,6 +304,8 @@ function getBookAvailabilityWithCallNo_(isbn13) {
 }
 
 const AVAIL_CACHE_DAYS = 365;
+const AVAIL_ERROR_CACHE_HOURS = 6; // 정보나루 API 실패(할당량 등) 시, 이 시간 동안은 재시도하지 않고 빈 결과를 바로 반환
+const AVAIL_ERROR_MARKER = 'ERROR';
 
 function ensureBooksAvailColumns_(sheet) {
   ['avail_json', 'avail_checked_at', 'callno'].forEach(h => {
@@ -316,8 +318,10 @@ function ensureBooksAvailColumns_(sheet) {
 
 /**
  * 도서관 보유/대출가능 여부를 book_id 기준으로 캐싱해서 반환.
- * 캐시가 없거나 AVAIL_CACHE_DAYS(1년)보다 오래됐을 때만 실제 정보나루 API를 호출함
- * → 하루 호출량 한도(500건)를 목록 조회만으로 다 써버리는 문제를 방지.
+ * 성공한 조회는 AVAIL_CACHE_DAYS(1년) 동안 캐시를 재사용.
+ * 정보나루 API가 실패(할당량 초과 등으로 예외 발생)하면, 그 실패 자체를 AVAIL_ERROR_CACHE_HOURS 동안
+ * 캐시해서 화면을 열 때마다 매번 느린 API 재시도를 반복하지 않도록 함(실패 전엔 이 캐싱이 빠져 있어서
+ * 할당량이 막힌 책은 매번 재시도하느라 느렸던 문제를 고침).
  */
 function getBookAvailabilityCached(isbn13, bookId) {
   const sheet = getSheet_(SHEETS.BOOKS);
@@ -334,19 +338,31 @@ function getBookAvailabilityCached(isbn13, bookId) {
 
     const checkedAt = values[r][idxChecked];
     const cachedJson = values[r][idxJson];
-    const isFresh = checkedAt && cachedJson &&
-      (new Date() - new Date(checkedAt)) < AVAIL_CACHE_DAYS * 24 * 60 * 60 * 1000;
+    const isErrorCache = cachedJson === AVAIL_ERROR_MARKER;
+    const ttlMs = (isErrorCache ? AVAIL_ERROR_CACHE_HOURS * 60 * 60 * 1000 : AVAIL_CACHE_DAYS * 24 * 60 * 60 * 1000);
+    const isFresh = checkedAt && cachedJson && (new Date() - new Date(checkedAt)) < ttlMs;
     if (isFresh) {
+      if (isErrorCache) return [];
       try { return JSON.parse(cachedJson); } catch (e) { /* 캐시 파싱 실패 시 새로 조회 */ }
     }
 
-    const fresh = getBookAvailabilityWithCallNo_(isbn13);
-    sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh.libs));
-    sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
-    if (fresh.callno) sheet.getRange(r + 1, idxCallno + 1).setValue(fresh.callno);
-    return fresh.libs;
+    try {
+      const fresh = getBookAvailabilityWithCallNo_(isbn13);
+      sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh.libs));
+      sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+      if (fresh.callno) sheet.getRange(r + 1, idxCallno + 1).setValue(fresh.callno);
+      return fresh.libs;
+    } catch (err) {
+      sheet.getRange(r + 1, idxJson + 1).setValue(AVAIL_ERROR_MARKER);
+      sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+      return [];
+    }
   }
-  return getBookAvailabilityWithCallNo_(isbn13).libs;
+  try {
+    return getBookAvailabilityWithCallNo_(isbn13).libs;
+  } catch (err) {
+    return [];
+  }
 }
 
 /**

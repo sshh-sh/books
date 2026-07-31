@@ -444,17 +444,17 @@ main{flex:1;padding:22px 24px 60px;}
   </div>
 
   <main>
+    <div class="search-popover" id="search-popover">
+      <div class="search-bar">
+        <input type="text" id="search-input" placeholder="제목, 저자, ISBN으로 검색해서 바로 담기" onkeydown="if(event.key==='Enter') doSearch()">
+        <button onclick="doSearch()">검색</button>
+        <button class="barcode-btn" onclick="openBarcode()">바코드</button>
+      </div>
+      <div class="search-results" id="search-results" style="display:none;"></div>
+    </div>
+
     <!-- 읽을래용 -->
     <section class="view active" id="view-want">
-      <div class="search-popover" id="search-popover">
-        <div class="search-bar">
-          <input type="text" id="search-input" placeholder="제목, 저자, ISBN으로 검색해서 바로 담기" onkeydown="if(event.key==='Enter') doSearch()">
-          <button onclick="doSearch()">검색</button>
-          <button class="barcode-btn" onclick="openBarcode()">바코드</button>
-        </div>
-        <div class="search-results" id="search-results" style="display:none;"></div>
-      </div>
-
       <div class="branch-row" id="branch-row"></div>
 
       <div class="book-grid" id="book-grid">
