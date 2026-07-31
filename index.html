@@ -593,30 +593,29 @@ main{flex:1;padding:22px 24px 60px;}
   </div>
 </div>
 
-<!-- 읽음 기록 편집 모달 -->
+<!-- 책 정보 수정 모달 -->
 <div class="overlay" id="record-overlay">
   <div class="detail-card" style="max-width:420px;">
     <div style="display:flex;">
-      <div class="detail-title" id="rec-title" style="font-size:1.15rem;">-</div>
+      <div class="detail-title" style="font-size:1.15rem;">수정</div>
       <button class="close-x" onclick="closeRecord()">×</button>
     </div>
-    <div class="detail-author" id="rec-author">-</div>
 
-    <div class="field-block" id="rec-date-block">
-      <div class="field-label">읽은 날짜</div>
-      <input type="date" class="date-input" id="rec-date">
+    <div class="field-block">
+      <div class="field-label">제목</div>
+      <input type="text" class="date-input" id="rec-title-input" style="width:100%;">
     </div>
-    <div class="field-block" id="rec-dropped-pill" style="display:none;">
-      <span class="status-pill status-dropped">중도포기</span>
+    <div class="field-block">
+      <div class="field-label">저자</div>
+      <input type="text" class="date-input" id="rec-author-input" style="width:100%;">
+    </div>
+    <div class="field-block" id="rec-date-block" style="display:none;">
+      <div class="field-label">읽은 날짜 (예: 260731)</div>
+      <input type="text" class="date-input" id="rec-date" style="width:100%;" placeholder="260731" maxlength="6" inputmode="numeric">
     </div>
 
     <div class="field-block">
-      <div class="field-label" id="rec-memo-label">한줄평 / 감상 메모</div>
-      <textarea class="memo-input" id="rec-memo" rows="3"></textarea>
-    </div>
-
-    <div class="field-block">
-      <button class="link-btn" id="rec-toggle-btn" onclick="toggleDropped()">중도포기로 표시</button>
+      <button class="add-btn" style="width:100%;text-align:center;" onclick="confirmEdit()">저장</button>
     </div>
   </div>
 </div>
@@ -758,6 +757,7 @@ function wantCardHtml(b){
         <div class="kebab-wrap">
           <button class="kebab-btn" onclick="event.stopPropagation();toggleKebab(this)">⋯</button>
           <div class="kebab-menu">
+            <button onclick="this.closest('.kebab-menu').classList.remove('open');openEditForWant(${b.userBook.id})">수정</button>
             <button class="danger-opt" onclick="removeWantThis(${b.userBook.id}, this)">삭제</button>
           </div>
         </div>
@@ -872,6 +872,7 @@ async function loadReading(){
           <div class="kebab-wrap">
             <button class="kebab-btn" onclick="event.stopPropagation();toggleKebab(this)">⋯</button>
             <div class="kebab-menu">
+              <button onclick="this.closest('.kebab-menu').classList.remove('open');openEditForReading(${b.userBook.id})">수정</button>
               <button class="danger-opt" onclick="dropThis(${b.userBook.id}, this)">중도포기로 표시</button>
               <button class="danger-opt" onclick="removeReadingThis(${b.userBook.id}, this)">삭제</button>
             </div>
@@ -958,6 +959,49 @@ async function confirmDoneAdd(){
   }catch(err){ showApiError(err); }
 }
 
+/* ============ 카드 ⋯메뉴: 수정(제목/저자, 읽었어용은 날짜도) ============ */
+let editCtx_ = null; // { kind: 'want'|'reading'|'done', userBookId, bookId }
+function openEditModal(kind, userBookId, bookId, title, author, readDate){
+  editCtx_ = { kind, userBookId, bookId };
+  document.getElementById('rec-title-input').value = title || '';
+  document.getElementById('rec-author-input').value = author || '';
+  document.getElementById('rec-date-block').style.display = kind === 'done' ? '' : 'none';
+  if(kind === 'done'){
+    const d = readDate ? new Date(normalizeDateVal_(readDate)) : new Date();
+    document.getElementById('rec-date').value = isNaN(d) ? '' : toShortDateStr_(d);
+  }
+  document.getElementById('record-overlay').classList.add('active');
+}
+function closeRecord(){ document.getElementById('record-overlay').classList.remove('active'); }
+function openEditForWant(userBookId){
+  const b = wantCache.find(x=>x.userBook.id===userBookId);
+  if(b) openEditModal('want', b.userBook.id, b.id, b.title, b.author);
+}
+function openEditForReading(userBookId){
+  const b = readingCache.find(x=>x.userBook.id===userBookId);
+  if(b) openEditModal('reading', b.userBook.id, b.id, b.title, b.author);
+}
+function openEditForDone(userBookId){
+  const b = doneCache.find(x=>x.userBook.id===userBookId);
+  if(b) openEditModal('done', b.userBook.id, b.id, b.title, b.author, b.userBook.read_date);
+}
+async function confirmEdit(){
+  if(!editCtx_) return;
+  const title = document.getElementById('rec-title-input').value.trim();
+  const author = document.getElementById('rec-author-input').value.trim();
+  try{
+    await apiPost('updateBookInfo', { bookId: editCtx_.bookId, title, author });
+    if(editCtx_.kind === 'done'){
+      const readDate = parseShortDateStr_(document.getElementById('rec-date').value);
+      await apiPost('updateReadDate', { userBookId: editCtx_.userBookId, readDate });
+    }
+    closeRecord();
+    if(editCtx_.kind === 'want') loadWant();
+    else if(editCtx_.kind === 'reading') loadReading();
+    else { loadDone(); loadStats(); }
+  }catch(err){ showApiError(err); }
+}
+
 /* ============ 읽었어용 ============ */
 let doneCache = [];
 /* read_date는 정상적으로는 'YYYY-MM-DD'(또는 ISO) 문자열이지만, 과거 일부 데이터가
@@ -988,6 +1032,7 @@ function doneCardHtml(b){
         <div class="kebab-wrap">
           <button class="kebab-btn" onclick="event.stopPropagation();toggleKebab(this)">⋯</button>
           <div class="kebab-menu">
+            <button onclick="this.closest('.kebab-menu').classList.remove('open');openEditForDone(${b.userBook.id})">수정</button>
             <button class="danger-opt" onclick="removeDoneThis(${b.userBook.id})">삭제</button>
           </div>
         </div>

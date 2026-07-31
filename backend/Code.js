@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -699,6 +699,29 @@ function updateReasonNote(userBookId, note) {
   updateUserBookField_(userBookId, 'reason_note', note || '');
 }
 
+/** 카드 ⋯메뉴의 "수정"에서 제목/저자 고치기. bookId는 Books 시트 기준(여러 UserBooks가 같은 book을 공유할 수 있음) */
+function updateBookInfo(bookId, title, author) {
+  const sheet = getSheet_(SHEETS.BOOKS);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxId = headers.indexOf('id');
+  const idxTitle = headers.indexOf('title');
+  const idxAuthor = headers.indexOf('author');
+  for (let r = 1; r < values.length; r++) {
+    if (Number(values[r][idxId]) === Number(bookId)) {
+      sheet.getRange(r + 1, idxTitle + 1).setValue(title || '');
+      sheet.getRange(r + 1, idxAuthor + 1).setValue(author || '');
+      return;
+    }
+  }
+  throw new Error('Books id를 찾을 수 없습니다: ' + bookId);
+}
+
+/** 읽었어용 카드 ⋯메뉴의 "수정"에서 읽은 날짜 고치기 */
+function updateReadDate(userBookId, readDate) {
+  updateUserBookField_(userBookId, 'read_date', readDate);
+}
+
 function removeUserBook(userBookId) {
   const sheet = getSheet_(SHEETS.USER_BOOKS);
   const values = sheet.getDataRange().getValues();
@@ -833,6 +856,8 @@ const API_ACTIONS = {
   markFinished: (p) => markFinished(p.userBookId, p.readDate),
   markDropped: (p) => markDropped(p.userBookId),
   updateReasonNote: (p) => updateReasonNote(p.userBookId, p.note),
+  updateBookInfo: (p) => updateBookInfo(p.bookId, p.title, p.author),
+  updateReadDate: (p) => updateReadDate(p.userBookId, p.readDate),
   removeUserBook: (p) => removeUserBook(p.userBookId),
   dedupeUserBooks: () => dedupeUserBooks(),
   mergeDuplicateBooksByIsbn: () => mergeDuplicateBooksByIsbn(),
