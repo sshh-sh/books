@@ -739,6 +739,7 @@ async function addWant(i){
 /* ============ 읽을래용: 목록 ============ */
 let wantCache = [];
 let bookLibrariesMap = {}; // book_id -> ['남사','수지',...] (보유 도서관 이름 목록, 필터용)
+let bookCallnoMap = {}; // book_id -> {'남사':'813.6', '용인중앙':'813.62'} (지점별 청구기호, 남사/용인중앙만)
 let activeBranchFilter = null; // null이면 전체
 
 function renderWantCount(){
@@ -765,6 +766,7 @@ function wantCardHtml(b){
         <div class="book-title">${escapeHtml(b.title)}</div>
         <div class="book-author-year">${escapeHtml(b.author)}</div>
         <div class="avail-lines" id="avail-${b.userBook.id}"><div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보 확인 중...</div></div>
+        <div class="callno" id="callno-${b.userBook.id}"></div>
         <div class="reason-input">
           <textarea rows="2" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
         </div>
@@ -808,6 +810,9 @@ async function loadAvailability(b){
   try{
     const libs = await apiGet('getBookAvailabilityCached', { isbn13: b.isbn, bookId: b.id });
     bookLibrariesMap[b.id] = libs.map(l=>l.libraryName);
+    const callnoMap = {};
+    libs.forEach(l=>{ if(l.callno) callnoMap[l.libraryName] = l.callno; });
+    bookCallnoMap[b.id] = callnoMap;
     if(!libs.length){ box.innerHTML = '<div><span class="al-label">보유도서관</span> 없음</div>'; applyBranchFilter(); return; }
     const owned = libs.map(l=>l.libraryName).join(', ');
     const available = libs.filter(l=>l.available).map(l=>l.libraryName);
@@ -955,10 +960,21 @@ async function confirmDoneAdd(){
 
 /* ============ 읽었어용 ============ */
 let doneCache = [];
+/* read_date는 정상적으로는 'YYYY-MM-DD'(또는 ISO) 문자열이지만, 과거 일부 데이터가
+   숫자(YYYYMMDD)로 잘못 저장된 적이 있어 방어적으로 문자열로 정규화해서 사용 */
+function normalizeDateVal_(v){
+  if(v === null || v === undefined || v === '') return '';
+  if(typeof v === 'number'){
+    const s = String(v);
+    return s.length === 8 ? (s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8)) : '';
+  }
+  return String(v);
+}
 function doneYearKey_(b){
-  return b.userBook.dropped ? '중도포기' : (b.userBook.read_date||'').slice(0,4);
+  return b.userBook.dropped ? '중도포기' : normalizeDateVal_(b.userBook.read_date).slice(0,4);
 }
 function formatShortDate_(dateStr){
+  dateStr = normalizeDateVal_(dateStr);
   if(!dateStr) return '';
   const d = new Date(dateStr);
   if(isNaN(d)) return '';
@@ -1013,7 +1029,7 @@ function renderDoneYear(year){
   }
   const groups = {};
   list.forEach(b=>{
-    const d = new Date(b.userBook.read_date);
+    const d = new Date(normalizeDateVal_(b.userBook.read_date));
     const m = isNaN(d) ? 0 : d.getMonth()+1;
     (groups[m] = groups[m] || []).push(b);
   });
@@ -1050,7 +1066,7 @@ async function loadStats(){
     const now = new Date();
     const currentYear = now.getFullYear();
     const finished = done.filter(b => !b.userBook.dropped && b.userBook.read_date);
-    const yearsSet = new Set(finished.map(b => new Date(b.userBook.read_date).getFullYear()));
+    const yearsSet = new Set(finished.map(b => new Date(normalizeDateVal_(b.userBook.read_date)).getFullYear()));
     yearsSet.add(currentYear);
     const years = [...yearsSet].sort((a,b)=>b-a); // 최신 연도부터
 
@@ -1060,7 +1076,7 @@ async function loadStats(){
     document.getElementById('mt-year-rows').innerHTML = years.map(year=>{
       const monthCounts = Array(12).fill(0);
       finished.forEach(b=>{
-        const d = new Date(b.userBook.read_date);
+        const d = new Date(normalizeDateVal_(b.userBook.read_date));
         if(d.getFullYear() === year) monthCounts[d.getMonth()]++;
       });
       const cells = monthCounts.map((c,i)=>
@@ -1142,6 +1158,16 @@ function callnoCompare_(a, b){
 }
 /* 전체(필터 없음)일 땐 최근 추가한 책이 맨 앞, 특정 도서관 필터일 땐 그 도서관 보유 책만 청구기호순으로 정렬.
    카드 DOM은 재사용(appendChild로 순서만 옮김)해서 이미 불러온 도서관 정보 표시가 지워지지 않게 함 */
+function updateCallnoTags_(){
+  document.querySelectorAll('#book-grid .book-card').forEach(card=>{
+    const tag = document.getElementById('callno-'+card.dataset.userBookId);
+    if(!tag) return;
+    const callnos = bookCallnoMap[card.dataset.bookId];
+    const cn = activeBranchFilter && callnos ? callnos[activeBranchFilter] : '';
+    tag.textContent = cn ? `${activeBranchFilter} 청구기호 ${cn}` : '';
+  });
+}
+
 function applyBranchFilter(){
   const grid = document.getElementById('book-grid');
   const cards = [...grid.querySelectorAll('.book-card')];
@@ -1153,6 +1179,7 @@ function applyBranchFilter(){
       return new Date((b2&&b2.userBook.added_date)||0) - new Date((b1&&b1.userBook.added_date)||0);
     });
     cards.forEach(c=>grid.appendChild(c));
+    updateCallnoTags_();
     return;
   }
 
@@ -1163,10 +1190,12 @@ function applyBranchFilter(){
   });
   const visible = cards.filter(c=>c.style.display !== 'none');
   visible.sort((c1,c2)=>{
-    const b1 = findWantBook_(c1.dataset.userBookId), b2 = findWantBook_(c2.dataset.userBookId);
-    return callnoCompare_((b1&&b1.callno)||'', (b2&&b2.callno)||'');
+    const cn1 = (bookCallnoMap[c1.dataset.bookId]||{})[activeBranchFilter] || '';
+    const cn2 = (bookCallnoMap[c2.dataset.bookId]||{})[activeBranchFilter] || '';
+    return callnoCompare_(cn1, cn2);
   });
   visible.forEach(c=>grid.appendChild(c));
+  updateCallnoTags_();
 }
 
 function initBranchDrag_(row){
