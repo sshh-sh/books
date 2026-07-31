@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -278,13 +278,34 @@ function getBookAvailability(isbn13) {
 }
 
 /**
- * [현재 비활성화] 대표 청구기호 조회 시도.
- * 정보나루 itemSrch는 "특정 ISBN 소장 조회"용이 아니라 "기간 내 신착도서 목록" API라
- * startDt/endDt(기간)가 필수이고 keyword로 ISBN을 넣어도 필터링되지 않음(전체 신착목록이 그대로 반환됨).
- * 즉 이 엔드포인트로는 임의 ISBN의 청구기호를 안정적으로 가져올 방법이 없어서, 실제 API 호출 없이
- * 항상 빈 값을 반환하도록 막아둠(괜히 할당량만 소모하는 것을 방지). 대체 방법을 찾기 전까지 비활성 상태.
+ * 대표 청구기호 조회. 정보나루 itemSrch를 isbn13 파라미터(keyword가 아님)로 호출해야
+ * 실제로 그 ISBN만 필터링됨. startDt/endDt(기간)는 필수이고, 서버가 내부적으로 최근 약 10년으로
+ * 제한하기 때문에 그보다 오래전에 등록된 소장본은 이 API로 못 찾을 수 있음(그 경우 빈 값 반환).
+ * class_no(분류기호, 예: "813.6")와 callNumbers[0].callNumber.book_code(도서기호, 예: "케68ㅈ")를
+ * 합쳐서 실제 서가 청구기호 형태로 반환.
  */
 function fetchRepresentativeCallNo_(isbn13, libCode) {
+  const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
+  if (!key || !libCode) return '';
+  try {
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const url = 'http://data4library.kr/api/itemSrch'
+      + '?authKey=' + encodeURIComponent(key)
+      + '&libCode=' + encodeURIComponent(libCode)
+      + '&isbn13=' + encodeURIComponent(isbn13)
+      + '&startDt=2000-01-01&endDt=' + today
+      + '&format=json';
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const data = JSON.parse(res.getContentText());
+    const docs = (data.response && data.response.docs) || [];
+    if (docs.length && docs[0].doc) {
+      const doc = docs[0].doc;
+      const classNo = doc.class_no || '';
+      const cn = doc.callNumbers && doc.callNumbers[0] && doc.callNumbers[0].callNumber;
+      const bookCode = (cn && cn.book_code) || '';
+      return [classNo, bookCode].filter(Boolean).join(' ');
+    }
+  } catch (err) { /* 실패하면 그냥 빈 값 */ }
   return '';
 }
 
