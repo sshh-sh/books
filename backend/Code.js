@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -200,7 +200,10 @@ const PRIORITY_BRANCH_NAMES = ['남사', '용인중앙'];
 function getPriorityLibCodes_() {
   const props = PropertiesService.getScriptProperties();
   const cached = props.getProperty('PRIORITY_LIB_CODES');
-  if (cached) return JSON.parse(cached);
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    if (Object.keys(parsed).length > 0) return parsed; // 빈 값으로 캐시된 적이 있어서 그 경우엔 재조회
+  }
 
   const libs = fetchYonginBranches_(); // libSrch API 1회 호출
   const codes = {};
@@ -208,7 +211,7 @@ function getPriorityLibCodes_() {
     const name = stripDoseogwan_(l.libName);
     if (PRIORITY_BRANCH_NAMES.indexOf(name) !== -1) codes[name] = l.libCode;
   });
-  props.setProperty('PRIORITY_LIB_CODES', JSON.stringify(codes));
+  if (Object.keys(codes).length > 0) props.setProperty('PRIORITY_LIB_CODES', JSON.stringify(codes));
   return codes;
 }
 
@@ -275,32 +278,30 @@ function getBookAvailability(isbn13) {
 }
 
 /**
- * 대표 청구기호 하나를 가져옴(정렬용). 소장 도서관 중 첫 번째 것 기준.
- * 정보나루 itemSrch(소장자료 조회) API 사용 — 할당량이 풀리기 전까지는 계속 빈 값일 수 있음.
+ * [현재 비활성화] 대표 청구기호 조회 시도.
+ * 정보나루 itemSrch는 "특정 ISBN 소장 조회"용이 아니라 "기간 내 신착도서 목록" API라
+ * startDt/endDt(기간)가 필수이고 keyword로 ISBN을 넣어도 필터링되지 않음(전체 신착목록이 그대로 반환됨).
+ * 즉 이 엔드포인트로는 임의 ISBN의 청구기호를 안정적으로 가져올 방법이 없어서, 실제 API 호출 없이
+ * 항상 빈 값을 반환하도록 막아둠(괜히 할당량만 소모하는 것을 방지). 대체 방법을 찾기 전까지 비활성 상태.
  */
 function fetchRepresentativeCallNo_(isbn13, libCode) {
-  const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
-  if (!key || !libCode) return '';
-  try {
-    const url = 'http://data4library.kr/api/itemSrch'
-      + '?authKey=' + encodeURIComponent(key)
-      + '&libCode=' + encodeURIComponent(libCode)
-      + '&keyword=' + encodeURIComponent(isbn13)
-      + '&format=json';
-    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    const data = JSON.parse(res.getContentText());
-    const docs = (data.response && data.response.docs) || [];
-    if (docs.length && docs[0].doc) return docs[0].doc.callNo || '';
-  } catch (err) { /* 실패하면 그냥 빈 값 */ }
   return '';
 }
 
-/** 보유도서관 목록 + 대표 청구기호를 함께 조회 (캐싱 저장용) */
+/**
+ * 보유도서관 목록을 조회하면서, 그중 남사/용인중앙 지점은 각각의 청구기호도 함께 채워서 반환.
+ * (다른 지점은 청구기호를 조회하지 않음 — API 호출량을 아끼기 위해 우선 지점만)
+ */
 function getBookAvailabilityWithCallNo_(isbn13) {
   const libs = getBookAvailability(isbn13);
-  let callno = '';
-  if (libs.length) callno = fetchRepresentativeCallNo_(isbn13, libs[0].libCode);
-  return { libs: libs.map(l => ({ libraryName: l.libraryName, available: l.available })), callno: callno };
+  const enriched = libs.map(l => {
+    let callno = '';
+    if (PRIORITY_BRANCH_NAMES.indexOf(l.libraryName) !== -1 && l.libCode) {
+      callno = fetchRepresentativeCallNo_(isbn13, l.libCode);
+    }
+    return { libraryName: l.libraryName, available: l.available, callno: callno };
+  });
+  return { libs: enriched };
 }
 
 const AVAIL_CACHE_DAYS = 365;
@@ -350,7 +351,6 @@ function getBookAvailabilityCached(isbn13, bookId) {
       const fresh = getBookAvailabilityWithCallNo_(isbn13);
       sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh.libs));
       sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
-      if (fresh.callno) sheet.getRange(r + 1, idxCallno + 1).setValue(fresh.callno);
       return fresh.libs;
     } catch (err) {
       sheet.getRange(r + 1, idxJson + 1).setValue(AVAIL_ERROR_MARKER);
@@ -400,7 +400,6 @@ function populateAvailabilityCacheForAll() {
   const idxIsbn = headers.indexOf('isbn');
   const idxJson = headers.indexOf('avail_json');
   const idxChecked = headers.indexOf('avail_checked_at');
-  const idxCallno = headers.indexOf('callno');
   let count = 0;
 
   for (let r = 1; r < values.length; r++) {
@@ -411,7 +410,6 @@ function populateAvailabilityCacheForAll() {
       const fresh = getBookAvailabilityWithCallNo_(isbn);
       sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(fresh.libs));
       sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
-      if (fresh.callno) sheet.getRange(r + 1, idxCallno + 1).setValue(fresh.callno);
       count++;
     } catch (err) {
       return { done: count, stoppedAt: values[r][idxId], error: err.message };
@@ -419,6 +417,80 @@ function populateAvailabilityCacheForAll() {
     Utilities.sleep(200);
   }
   return { done: count, stoppedAt: null, error: null };
+}
+
+/**
+ * 읽을래용(읽고싶음 상태) 책들만 대상으로 남사/용인중앙 청구기호를 채움.
+ * avail_json 캐시가 이미 있으면 재사용(가용성 재조회 안 함)하고, 그 지점을 보유한 경우에만
+ * itemSrch로 청구기호 1건씩 추가 조회. 하루 500건 한도를 지키기 위해 480건 근처에서 자동 중단하고,
+ * 이미 처리된(callno 필드가 채워진) 책은 건너뛰므로 다시 실행하면 이어서 처리됨.
+ */
+function populateWantListCallNos() {
+  const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
+  if (!key) throw new Error('LIBRARY_KEY가 설정되지 않았습니다.');
+
+  const sheet = getSheet_(SHEETS.BOOKS);
+  ensureBooksAvailColumns_(sheet);
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idxId = headers.indexOf('id');
+  const idxIsbn = headers.indexOf('isbn');
+  const idxJson = headers.indexOf('avail_json');
+  const idxChecked = headers.indexOf('avail_checked_at');
+
+  const wantBookIds = {};
+  sheetToObjects_(getSheet_(SHEETS.USER_BOOKS))
+    .filter(ub => ub.status === '읽고싶음')
+    .forEach(ub => { wantBookIds[Number(ub.book_id)] = true; });
+
+  const priorityCodes = getPriorityLibCodes_();
+  let done = 0, apiCalls = 0;
+
+  for (let r = 1; r < values.length; r++) {
+    if (apiCalls >= 480) {
+      return { done: done, apiCalls: apiCalls, stoppedAt: values[r][idxId], note: '480건 근처에서 안전하게 중단. 다시 실행하면 이어서 처리됩니다.' };
+    }
+
+    const id = Number(values[r][idxId]);
+    if (!wantBookIds[id]) continue;
+    const isbn = values[r][idxIsbn];
+    if (!isbn) continue;
+
+    let libs = null;
+    const cachedJson = values[r][idxJson];
+    if (cachedJson && cachedJson !== AVAIL_ERROR_MARKER) {
+      try { libs = JSON.parse(cachedJson); } catch (e) { libs = null; }
+    }
+
+    const alreadyDone = !!libs && PRIORITY_BRANCH_NAMES.every(name => {
+      const entry = libs.find(l => l.libraryName === name);
+      return !entry || !!entry.callno;
+    });
+    if (alreadyDone) continue;
+
+    try {
+      if (!libs) {
+        libs = getBookAvailability(isbn).map(l => ({ libraryName: l.libraryName, available: l.available }));
+        apiCalls += 2;
+      }
+      libs = libs.map(l => {
+        if (PRIORITY_BRANCH_NAMES.indexOf(l.libraryName) !== -1 && !l.callno) {
+          const libCode = priorityCodes[l.libraryName];
+          const callno = libCode ? fetchRepresentativeCallNo_(isbn, libCode) : '';
+          apiCalls++;
+          return Object.assign({}, l, { callno: callno });
+        }
+        return l;
+      });
+      sheet.getRange(r + 1, idxJson + 1).setValue(JSON.stringify(libs));
+      sheet.getRange(r + 1, idxChecked + 1).setValue(new Date());
+      done++;
+    } catch (err) {
+      return { done: done, apiCalls: apiCalls, stoppedAt: id, error: err.message };
+    }
+    Utilities.sleep(150);
+  }
+  return { done: done, apiCalls: apiCalls, stoppedAt: null };
 }
 
 /** UserBooks에서 Books에 더 이상 존재하지 않는 book_id를 가리키는 유령 행 삭제 */
@@ -750,6 +822,7 @@ const API_ACTIONS = {
   getBookAvailability: (p) => getBookAvailability(p.isbn13),
   getBookAvailabilityCached: (p) => getBookAvailabilityCached(p.isbn13, p.bookId),
   seedKnownAvailability: (p) => seedKnownAvailability(p.isbn13, p.libs, p.callno),
+  populateWantListCallNos: () => populateWantListCallNos(),
   populateAvailabilityCacheForAll: () => populateAvailabilityCacheForAll(),
   removeOrphanedUserBooks: () => removeOrphanedUserBooks(),
   bulkImportReadBooks: (p) => bulkImportReadBooks(p.items),
