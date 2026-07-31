@@ -136,14 +136,12 @@ main{flex:1;padding:22px 24px 60px;}
   padding:8px 14px;font-size:0.8rem;font-weight:600;cursor:pointer;white-space:nowrap;
 }
 .add-btn:hover{background:var(--accent-soft);}
-.barcode-btn, .newbook-btn{
+.barcode-btn{
   flex-shrink:0;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
   background:var(--surface);color:var(--ink);font-family:var(--sans);font-size:0.85rem;
   font-weight:600;cursor:pointer;white-space:nowrap;
 }
-.barcode-btn:hover, .newbook-btn:hover{border-color:var(--accent);}
-.newbook-btn{background:var(--accent);color:var(--surface);border-color:var(--accent);}
-.outside-lib-row{display:flex;justify-content:flex-end;margin-bottom:16px;}
+.barcode-btn:hover{border-color:var(--accent);}
 .already-tag{
   font-size:0.75rem;color:var(--ink-soft);font-family:var(--sans);white-space:nowrap;flex-shrink:0;
 }
@@ -464,9 +462,6 @@ main{flex:1;padding:22px 24px 60px;}
 
     <!-- 읽는중이용 -->
     <section class="view" id="view-reading">
-      <div class="outside-lib-row">
-        <button class="newbook-btn" onclick="openNewBook()">도서관 외</button>
-      </div>
       <div class="book-grid" id="reading-grid">
         <div class="empty-msg">불러오는 중...</div>
       </div>
@@ -574,30 +569,26 @@ main{flex:1;padding:22px 24px 60px;}
   </div>
 </div>
 
-<!-- 도서관 외 책 추가 모달 (구입/대여 등 도서관 경로가 아닌 책 → 읽는중이용으로) -->
-<div class="overlay" id="newbook-overlay">
+<!-- 검색 결과에서 읽었어용으로 바로 추가할 때 날짜/감상 입력 모달 -->
+<div class="overlay" id="doneadd-overlay">
   <div class="detail-card" style="max-width:420px;">
     <div style="display:flex;">
-      <div class="detail-title" style="font-size:1.1rem;">도서관 외 책 추가</div>
-      <button class="close-x" onclick="closeNewBook()">×</button>
+      <div class="detail-title" style="font-size:1.1rem;">읽었어용에 추가</div>
+      <button class="close-x" onclick="closeDoneAdd()">×</button>
     </div>
-    <div class="field-label" style="margin-top:4px;">구입했거나 빌려온 책 등 도서관을 거치지 않은 책을 읽는중이용에 추가해요</div>
+    <div class="field-label" id="doneadd-book-label" style="margin-top:4px;">-</div>
 
     <div class="field-block">
-      <div class="field-label">제목</div>
-      <input type="text" id="ob-title" class="date-input" style="width:100%;">
+      <div class="field-label">읽은 날짜 (예: 260731)</div>
+      <input type="text" id="doneadd-date" class="date-input" style="width:100%;" placeholder="260731" maxlength="6" inputmode="numeric">
     </div>
     <div class="field-block">
-      <div class="field-label">저자</div>
-      <input type="text" id="ob-author" class="date-input" style="width:100%;">
-    </div>
-    <div class="field-block">
-      <div class="field-label">담은 이유 / 메모</div>
-      <textarea class="memo-input" id="ob-reason" rows="2"></textarea>
+      <div class="field-label">감상 메모</div>
+      <textarea class="memo-input" id="doneadd-memo" rows="3"></textarea>
     </div>
 
     <div class="field-block">
-      <button class="add-btn" style="width:100%;text-align:center;" onclick="submitOutsideBook()">읽는중이용에 추가</button>
+      <button class="add-btn" style="width:100%;text-align:center;" onclick="confirmDoneAdd()">추가</button>
     </div>
   </div>
 </div>
@@ -675,8 +666,34 @@ function toggleSearch(){
   document.querySelector('.search-toggle').classList.toggle('active');
 }
 
+/* ============ 날짜 짧은 형식(YYMMDD, 예: 260731) 도우미 ============ */
+function toShortDateStr_(d){
+  const yy = String(d.getFullYear()).slice(2);
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return yy+mm+dd;
+}
+function parseShortDateStr_(raw){
+  const digits = (raw||'').replace(/[^0-9]/g,'');
+  if(digits.length === 6){
+    return '20'+digits.slice(0,2)+'-'+digits.slice(2,4)+'-'+digits.slice(4,6);
+  }
+  if(digits.length === 8){
+    return digits.slice(0,4)+'-'+digits.slice(4,6)+'-'+digits.slice(6,8);
+  }
+  return Utilities_todayIso_(); // 형식이 이상하면 오늘 날짜로
+}
+function Utilities_todayIso_(){ return new Date().toISOString().slice(0,10); }
+
+/* ============ 탭 공통: 지금 보고 있는 탭이 무엇인지 ============ */
+function activeTabView_(){
+  const btn = document.querySelector('.tab-btn.active');
+  return btn ? btn.dataset.view : 'want';
+}
+
 /* ============ 읽을래용: 검색 ============ */
 let searchCache = [];
+let doneAddPendingIndex_ = null;
 async function doSearch(){
   const q = document.getElementById('search-input').value.trim();
   if(!q) return;
@@ -687,7 +704,12 @@ async function doSearch(){
     const items = await apiGet('searchAladin', { query: q });
     searchCache = items;
     if(!items.length){ box.innerHTML = '<div class="empty-msg">검색 결과가 없어요.</div>'; return; }
-    const wantIsbns = new Set(wantCache.map(b=>b.isbn));
+    const view = activeTabView_();
+    const alreadyIsbns = new Set(
+      (view === 'reading' ? readingCache : view === 'done' ? doneCache : wantCache).map(b=>b.isbn)
+    );
+    const addLabel = view === 'reading' ? '+ 읽는중 추가' : view === 'done' ? '+ 읽음 추가' : '+ 담기';
+    const addFn = view === 'reading' ? 'addReadingFromSearch' : view === 'done' ? 'openDoneAdd' : 'addWant';
     box.innerHTML = items.map((it,i)=>`
       <div class="result-row">
         <img class="cover" src="${it.cover||''}" alt="">
@@ -696,9 +718,9 @@ async function doSearch(){
           <div class="book-author-year">${escapeHtml(it.author)} · ${escapeHtml(it.pubDate||'').slice(0,4)}</div>
           <div class="blurb result-blurb">${escapeHtml(it.description||'')}</div>
         </div>
-        ${wantIsbns.has(it.isbn13)
+        ${alreadyIsbns.has(it.isbn13)
           ? '<span class="already-tag">이미 담겨있어요</span>'
-          : `<button class="add-btn" onclick="addWant(${i})">+ 담기</button>`}
+          : `<button class="add-btn" onclick="${addFn}(${i})">${addLabel}</button>`}
       </div>
     `).join('');
   }catch(err){ showApiError(err); box.innerHTML = '<div class="empty-msg">검색 중 오류가 났어요.</div>'; }
@@ -828,10 +850,12 @@ async function saveReason(userBookId, value){
 }
 
 /* ============ 읽는중이용 ============ */
+let readingCache = [];
 async function loadReading(){
   const grid = document.getElementById('reading-grid');
   try{
     const list = await apiGet('getReadingList');
+    readingCache = list;
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">읽는 중인 책이 없어요.</div>'; return; }
     grid.innerHTML = list.map(b => `
       <div class="book-card">
@@ -868,12 +892,12 @@ document.addEventListener('click', (e)=>{
   if(!e.target.closest('.kebab-wrap')) document.querySelectorAll('.kebab-menu.open').forEach(m=>m.classList.remove('open'));
 });
 async function openFinishPrompt(userBookId, checkbox){
-  const today = new Date().toISOString().slice(0,10);
-  const d = prompt('읽은 날짜 (YYYY-MM-DD)', today);
-  if(d === null){ checkbox.checked = false; return; }
+  const todayShort = toShortDateStr_(new Date());
+  const raw = prompt('읽은 날짜 (예: 260731)', todayShort);
+  if(raw === null){ checkbox.checked = false; return; }
   checkbox.disabled = true;
   try{
-    await apiPost('markFinished', { userBookId, readDate: d || today });
+    await apiPost('markFinished', { userBookId, readDate: parseShortDateStr_(raw) });
     loadReading(); loadDone(); loadStats();
   }catch(err){ showApiError(err); checkbox.disabled=false; checkbox.checked=false; }
 }
@@ -892,20 +916,40 @@ async function removeReadingThis(userBookId, btn){
     loadReading();
   }catch(err){ showApiError(err); }
 }
-function openNewBook(){ document.getElementById('newbook-overlay').classList.add('active'); }
-function closeNewBook(){ document.getElementById('newbook-overlay').classList.remove('active'); }
-async function submitOutsideBook(){
-  const title = document.getElementById('ob-title').value.trim();
-  const author = document.getElementById('ob-author').value.trim();
-  const reason = document.getElementById('ob-reason').value.trim();
-  if(!title){ alert('제목을 입력해주세요.'); return; }
+/* ============ 검색 결과 → 읽는중이용/읽었어용 바로 추가 ============ */
+async function addReadingFromSearch(i){
+  const item = searchCache[i];
   try{
-    await apiPost('addToReadingList', { bookData: { title, author, isbn13:'', category:'기타', country:'기타' }, reasonNote: reason, source: '도서관외' });
-    closeNewBook();
-    document.getElementById('ob-title').value = '';
-    document.getElementById('ob-author').value = '';
-    document.getElementById('ob-reason').value = '';
+    await apiPost('addToReadingList', { bookData: item, reasonNote: '' });
+    document.getElementById('search-results').innerHTML = '';
+    document.getElementById('search-results').style.display = 'none';
+    document.getElementById('search-input').value = '';
+    toggleSearch();
     loadReading();
+  }catch(err){ showApiError(err); }
+}
+function openDoneAdd(i){
+  doneAddPendingIndex_ = i;
+  const item = searchCache[i];
+  document.getElementById('doneadd-book-label').textContent = item.title + ' · ' + (item.author||'');
+  document.getElementById('doneadd-date').value = toShortDateStr_(new Date());
+  document.getElementById('doneadd-memo').value = '';
+  document.getElementById('doneadd-overlay').classList.add('active');
+}
+function closeDoneAdd(){ document.getElementById('doneadd-overlay').classList.remove('active'); }
+async function confirmDoneAdd(){
+  if(doneAddPendingIndex_ === null) return;
+  const item = searchCache[doneAddPendingIndex_];
+  const readDate = parseShortDateStr_(document.getElementById('doneadd-date').value);
+  const note = document.getElementById('doneadd-memo').value.trim();
+  try{
+    await apiPost('addFinishedBookDirect', { bookData: item, note, readDate });
+    closeDoneAdd();
+    document.getElementById('search-results').innerHTML = '';
+    document.getElementById('search-results').style.display = 'none';
+    document.getElementById('search-input').value = '';
+    toggleSearch();
+    loadDone(); loadStats();
   }catch(err){ showApiError(err); }
 }
 

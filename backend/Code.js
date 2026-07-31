@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -602,6 +602,13 @@ function addToReadingList(bookData, reasonNote, source) {
   return id;
 }
 
+/** 검색으로 고른 책을 곧바로 읽었어용(다 읽은 상태)으로 등록 */
+function addFinishedBookDirect(bookData, note, readDate) {
+  const userBookId = addToReadingList(bookData, note || '', '도서관외');
+  markFinished(userBookId, readDate);
+  return userBookId;
+}
+
 function markBorrowed_toReading(userBookId) {
   updateUserBookField_(userBookId, 'status', '읽는중');
 }
@@ -748,6 +755,7 @@ const API_ACTIONS = {
   bulkImportReadBooks: (p) => bulkImportReadBooks(p.items),
   addToWantList: (p) => addToWantList(p.bookData, p.reasonNote),
   addToReadingList: (p) => addToReadingList(p.bookData, p.reasonNote, p.source),
+  addFinishedBookDirect: (p) => addFinishedBookDirect(p.bookData, p.note, p.readDate),
   markBorrowed_toReading: (p) => markBorrowed_toReading(p.userBookId),
   markFinished: (p) => markFinished(p.userBookId, p.readDate),
   markDropped: (p) => markDropped(p.userBookId),
