@@ -938,7 +938,7 @@ function openDoneAdd(i){
   doneAddPendingIndex_ = i;
   const item = searchCache[i];
   document.getElementById('doneadd-book-label').textContent = item.title + ' · ' + (item.author||'');
-  document.getElementById('doneadd-date').value = toShortDateStr_(new Date());
+  document.getElementById('doneadd-date').value = '';
   document.getElementById('doneadd-memo').value = '';
   document.getElementById('doneadd-overlay').classList.add('active');
 }
