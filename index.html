@@ -147,22 +147,25 @@ main{flex:1;padding:22px 24px 60px;}
 }
 
 /* ---- 도서관 지점 필터 ---- */
-.branch-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
-.branch-row{display:flex;gap:5px;flex-wrap:wrap;align-items:center;flex:1;min-width:0;}
+.branch-toolbar{
+  display:flex;align-items:center;gap:4px;margin-bottom:10px;flex-wrap:nowrap;
+  overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;
+}
+.branch-row{display:flex;gap:4px;flex-wrap:nowrap;align-items:center;flex-shrink:0;}
 .branch-row-spacer{display:none;}
 .branch-row .chip-select.dragging{opacity:0.4;}
 .chip-select{
-  font-family:var(--sans);font-size:0.82rem;color:var(--ink);
+  font-family:var(--sans);font-size:0.78rem;color:var(--ink);
   background:var(--surface);border:1px solid var(--line);border-radius:999px;
-  padding:7px 12px;cursor:grab;user-select:none;
+  padding:6px 10px;cursor:grab;user-select:none;white-space:nowrap;flex-shrink:0;
 }
 .chip-select.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
 .chip-select.dragging{opacity:0.4;}
 .chip-select.drag-over{border-color:var(--accent);border-style:dashed;}
 .more-branch-btn{
-  font-family:var(--sans);font-size:0.82rem;color:var(--ink-soft);
+  font-family:var(--sans);font-size:0.78rem;color:var(--ink-soft);
   background:none;border:1px dashed var(--line);border-radius:999px;
-  padding:7px 12px;cursor:pointer;
+  padding:6px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;
 }
 .more-branch-btn:hover{border-color:var(--accent);color:var(--accent);}
 
@@ -181,10 +184,11 @@ main{flex:1;padding:22px 24px 60px;}
 }
 .sort-toggle.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600;}
 .sort-combo{
-  font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);
+  font-family:var(--sans);font-size:0.78rem;color:var(--ink-soft);
   background:var(--surface);border:1px solid var(--line);border-radius:999px;
-  padding:6px 10px;cursor:pointer;
+  padding:6px 10px;cursor:pointer;flex-shrink:0;
 }
+.branch-toolbar .sort-combo{max-width:118px;}
 
 /* ---- 맨 위/아래 이동 버튼 ---- */
 .scroll-nav{
@@ -494,10 +498,10 @@ main{flex:1;padding:22px 24px 60px;}
 
     <!-- 읽었어용 -->
     <section class="view" id="view-done">
-      <div class="list-toolbar" style="justify-content:flex-end;">
+      <div class="list-toolbar" style="justify-content:flex-start;">
         <select class="sort-combo" id="done-year-select" onchange="renderDoneYear(this.value)"></select>
+        <span class="want-count" id="done-count"></span>
       </div>
-      <div class="count-row"><span class="want-count" id="done-count"></span></div>
       <div class="book-grid" id="done-list"><div class="empty-msg">불러오는 중...</div></div>
     </section>
 
@@ -519,7 +523,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v...</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.7</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -566,6 +570,10 @@ main{flex:1;padding:22px 24px 60px;}
         <video id="scan-video" muted playsinline autoplay style="width:100%;height:100%;object-fit:cover;display:none;"></video>
         <div class="scan-line"></div>
         <span id="scan-hint">바코드 전체가 잘리지 않게, 화면 절반 크기로 수평이 되게 비춰주세요</span>
+      </div>
+      <div id="scan-debug-wrap" style="display:none;margin-top:8px;">
+        <div class="field-label">방금 분석한 사진(인식 실패 시 확인용)</div>
+        <img id="scan-debug-img" style="width:100%;border-radius:8px;border:1px solid var(--line);" alt="">
       </div>
       <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:10px;display:none;">화면 미리보기에서 캡처해서 인식</button>
       <button class="link-btn" onclick="document.getElementById('scan-native-input').click()" style="color:var(--accent);">인식이 안 되나요? 카메라 앱으로 사진 찍어서 인식</button>
@@ -1412,6 +1420,8 @@ function closeDetail(){ document.getElementById('detail-overlay').classList.remo
 
 /* ============ 바코드 모달 (ZXing으로 카메라에서 실제 바코드 인식) ============ */
 let zxingReader_ = null;
+let nativePollTimer_ = null;
+let currentStream_ = null;
 let scanCache_ = null; // 인식/조회된 책 정보(알라딘 형식)
 function openBarcode(){
   document.getElementById('barcode-overlay').classList.add('active');
@@ -1427,6 +1437,7 @@ function restartScan(){
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'none';
   document.getElementById('scan-isbn-input').value = '';
+  hideScanDebugImage_();
   startScanCamera_();
 }
 function showManualIsbn(){
@@ -1435,11 +1446,13 @@ function showManualIsbn(){
   document.getElementById('scan-manual').style.display = 'block';
 }
 function stopScanCamera_(){
+  if(nativePollTimer_){ clearInterval(nativePollTimer_); nativePollTimer_ = null; }
   if(zxingReader_){ try{ zxingReader_.reset(); }catch(e){} }
   const video = document.getElementById('scan-video');
   video.style.display = 'none';
   document.getElementById('scan-capture-btn').style.display = 'none';
   document.getElementById('scan-viewfinder').classList.remove('live');
+  if(currentStream_){ currentStream_.getTracks().forEach(t=>t.stop()); currentStream_ = null; }
   if(video.srcObject){
     video.srcObject.getTracks().forEach(t=>t.stop());
     video.srcObject = null;
@@ -1451,35 +1464,83 @@ function stopScanCamera_(){
    ZXing의 decodeFromImageUrl은 완전히 동일한 이미지를 여러 번 디코딩해도 성공/실패가 들쭉날쭉한
    버그가 있음(직접 반복 테스트로 확인 — 같은 이미지 5번 중 3번 성공, 2번 실패). 그래서 실패해도
    바로 포기하지 않고 몇 번 더 재시도함(포맷 제한은 안 함 — 제한하면 오히려 더 자주 실패함). */
+/* 원본이 너무 크면(폰 카메라 사진은 보통 3000px 이상) 적당한 크기로 줄여서 디코드 대상으로 씀 —
+   너무 큰 이미지가 디코드 성공률/속도에 안 좋을 수 있어서. 줄인 버전으로 dataURL 다시 만듦 */
+async function normalizeImageForDecode_(dataUrl){
+  const img = new Image();
+  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
+  const maxW = 1600;
+  if(img.naturalWidth <= maxW) return dataUrl;
+  const scale = maxW / img.naturalWidth;
+  const canvas = document.createElement('canvas');
+  canvas.width = maxW;
+  canvas.height = Math.round(img.naturalHeight * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+/* 폰 브라우저(주로 Android Chrome)에 내장된 하드웨어 바코드 인식기 — zxing.js 라이브러리보다
+   훨씬 안정적임(zxing.js는 같은 이미지도 확률적으로 실패하는 버그가 있는 걸 직접 확인함).
+   지원 안 되면(null 리턴) zxing 재시도 루프로 폴백함. */
+async function tryNativeBarcodeDetect_(dataUrl){
+  if(typeof BarcodeDetector === 'undefined') return null;
+  try{
+    const img = new Image();
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
+    const detector = new BarcodeDetector({ formats: ['ean_13', 'upc_a'] });
+    const codes = await detector.detect(img);
+    for(const c of codes){
+      const text = String(c.rawValue || '').replace(/[^0-9]/g, '');
+      if(/^\d{12,13}$/.test(text)) return text.length === 12 ? '0' + text : text;
+    }
+    return null;
+  }catch(err){ return null; }
+}
 async function decodeImageDataUrl_(dataUrl){
-  const hints = new Map();
-  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  for(let attempt = 0; attempt < 6; attempt++){
+  const native = await tryNativeBarcodeDetect_(dataUrl);
+  if(native) return native;
+
+  const normalized = await normalizeImageForDecode_(dataUrl).catch(() => dataUrl);
+  for(let attempt = 0; attempt < 10; attempt++){
     try{
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
       const reader = new ZXing.BrowserMultiFormatReader(hints);
-      const result = await reader.decodeFromImageUrl(dataUrl);
+      const target = attempt % 3 === 0 ? dataUrl : normalized; // 가끔 원본 해상도로도 시도
+      const result = await reader.decodeFromImageUrl(target);
       const text = result.getText();
       if(/^\d{12,13}$/.test(text)) return text.length === 12 ? '0' + text : text;
     }catch(err){ /* 이번 시도만 실패, 다음 시도로 */ }
   }
   return null;
 }
+/* 인식 실패 시 방금 분석한 사진을 화면에 보여줌 — 카메라/사진 자체를 직접 볼 수 없는 상황에서
+   사용자가 프레이밍(잘림/기울기/초점) 문제를 스스로 확인할 수 있게 하기 위함 */
+function showScanDebugImage_(dataUrl){
+  document.getElementById('scan-debug-img').src = dataUrl;
+  document.getElementById('scan-debug-wrap').style.display = 'block';
+}
+function hideScanDebugImage_(){
+  document.getElementById('scan-debug-wrap').style.display = 'none';
+}
 async function captureAndDecode_(){
   const video = document.getElementById('scan-video');
   const hint = document.getElementById('scan-hint');
   if(!video.videoWidth){ hint.textContent = '카메라가 아직 준비되지 않았어요. 잠시 후 다시 시도해주세요.'; return; }
   hint.textContent = '인식 중...';
+  hideScanDebugImage_();
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const isbn13 = await decodeImageDataUrl_(canvas.toDataURL('image/jpeg', 0.92));
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  const isbn13 = await decodeImageDataUrl_(dataUrl);
   if(isbn13){
     stopScanCamera_();
     lookupScannedIsbn(isbn13);
     return;
   }
   hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
+  showScanDebugImage_(dataUrl);
 }
 /* 폰 기본 카메라 앱으로 찍은 사진(제대로 된 자동초점 사용)에서 인식 —
    getUserMedia 실시간 미리보기는 매크로(근접) 초점을 잘 못 잡는 폰이 많아서, 훨씬 안정적인 대안 */
@@ -1488,9 +1549,11 @@ async function handleNativeCapture_(input){
   if(!file) return;
   const hint = document.getElementById('scan-hint');
   hint.textContent = '사진에서 인식 중...';
+  hideScanDebugImage_();
   const reader = new FileReader();
   reader.onload = async () => {
-    const isbn13 = await decodeImageDataUrl_(reader.result);
+    const dataUrl = reader.result;
+    const isbn13 = await decodeImageDataUrl_(dataUrl);
     input.value = '';
     if(isbn13){
       stopScanCamera_();
@@ -1498,43 +1561,62 @@ async function handleNativeCapture_(input){
       return;
     }
     hint.textContent = '사진에서 바코드를 못 찾았어요. 바코드 전체가 화면에서 잘리지 않고, 수평으로, 크고 선명하게 나오도록 다시 찍어주세요.';
+    showScanDebugImage_(dataUrl);
   };
   reader.readAsDataURL(file);
 }
+/* 실시간 스캔도 네이티브 BarcodeDetector가 있으면 그걸 우선 사용(직접 getUserMedia로 스트림을 얻어
+   video에 붙이고, setInterval로 프레임을 주기적으로 검사). 없으면 zxing의 decodeContinuously로 폴백 —
+   이때도 이미 붙여놓은 같은 스트림을 재사용해서(attachStreamToVideo) getUserMedia를 두 번 부르지 않음. */
 async function startScanCamera_(){
   const hint = document.getElementById('scan-hint');
   const video = document.getElementById('scan-video');
-  if(typeof ZXing === 'undefined'){
-    hint.textContent = '바코드 인식 기능을 불러오지 못했어요. 직접 ISBN을 입력해주세요.';
-    return;
-  }
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     hint.textContent = '이 브라우저는 카메라를 지원하지 않아요. 직접 ISBN을 입력해주세요.';
     return;
   }
   try{
-    if(!zxingReader_){
-      const hints = new Map();
-      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-      zxingReader_ = new ZXing.BrowserMultiFormatReader(hints, 100);
-    }
+    const stream = await navigator.mediaDevices.getUserMedia(
+      { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } }
+    );
+    currentStream_ = stream;
+    video.srcObject = stream;
     video.style.display = 'block';
     document.getElementById('scan-viewfinder').classList.add('live');
-    video.addEventListener('loadedmetadata', () => {
-      document.getElementById('scan-capture-btn').style.display = 'block';
-    }, { once: true });
-    await zxingReader_.decodeFromConstraints(
-      { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      video,
-      (result) => {
+    await video.play();
+    document.getElementById('scan-capture-btn').style.display = 'block';
+
+    if(typeof BarcodeDetector !== 'undefined'){
+      const detector = new BarcodeDetector({ formats: ['ean_13', 'upc_a'] });
+      nativePollTimer_ = setInterval(async () => {
+        if(!video.videoWidth) return;
+        try{
+          const codes = await detector.detect(video);
+          for(const c of codes){
+            const text = String(c.rawValue || '').replace(/[^0-9]/g, '');
+            if(/^\d{12,13}$/.test(text)){
+              stopScanCamera_();
+              lookupScannedIsbn(text.length === 12 ? '0' + text : text);
+              return;
+            }
+          }
+        }catch(e){ /* 이번 프레임만 건너뜀 */ }
+      }, 350);
+    } else if(typeof ZXing !== 'undefined'){
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      zxingReader_ = new ZXing.BrowserMultiFormatReader(hints, 150);
+      zxingReader_.decodeContinuously(video, (result) => {
         if(!result) return;
         const text = result.getText();
         if(/^\d{12,13}$/.test(text)){
           stopScanCamera_();
           lookupScannedIsbn(text.length === 12 ? '0' + text : text);
         }
-      }
-    );
+      });
+    } else {
+      hint.textContent = '바코드 인식 기능을 불러오지 못했어요. 직접 ISBN을 입력해주세요.';
+    }
   }catch(err){
     console.error(err);
     hint.textContent = '카메라를 열 수 없어요. 직접 ISBN을 입력해주세요.';
@@ -1593,7 +1675,6 @@ loadReading();
 loadDone();
 loadStats();
 loadBranches();
-apiGet('getVersion').then(v => { document.getElementById('app-version').textContent = v; }).catch(()=>{});
 </script>
 
 </body>
