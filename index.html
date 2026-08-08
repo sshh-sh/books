@@ -48,7 +48,7 @@
   --mono: "NanumSquareRound", "Apple SD Gothic Neo", "Segoe UI", "Malgun Gothic", sans-serif;
 }
 *{box-sizing:border-box;}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);overflow-x:hidden;}
 .app{max-width:760px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;}
 @media (min-width:900px){
   body{font-size:1.08rem;}
@@ -110,9 +110,9 @@ main{flex:1;padding:22px 24px 60px;}
   padding:12px;margin-bottom:16px;
 }
 .search-popover.open{display:block;}
-.search-bar{display:flex;gap:8px;}
+.search-bar{display:flex;gap:8px;min-width:0;}
 .search-bar input{
-  flex:1;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
+  flex:1;min-width:0;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
   background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:0.9rem;
 }
 .search-bar input:focus-visible{outline:2px solid var(--accent);}
@@ -1447,17 +1447,22 @@ function stopScanCamera_(){
 }
 /* 연속 자동인식이 잘 안 될 때: 지금 화면의 한 프레임을 정지사진처럼 캡처해서 별도 리더로 인식 시도
    (연속 스캔은 저조도/블러에 약한데, 캡처는 사용자가 초점 맞을 때를 골라 찍을 수 있어 성공률이 더 높음) */
-/* 정지 이미지(캡처/촬영 결과)에서 바코드 텍스트 추출. 못 찾으면 null. */
+/* 정지 이미지(캡처/촬영 결과)에서 바코드 텍스트 추출. 못 찾으면 null.
+   ZXing의 decodeFromImageUrl은 완전히 동일한 이미지를 여러 번 디코딩해도 성공/실패가 들쭉날쭉한
+   버그가 있음(직접 반복 테스트로 확인 — 같은 이미지 5번 중 3번 성공, 2번 실패). 그래서 실패해도
+   바로 포기하지 않고 몇 번 더 재시도함(포맷 제한은 안 함 — 제한하면 오히려 더 자주 실패함). */
 async function decodeImageDataUrl_(dataUrl){
   const hints = new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  const stillReader = new ZXing.BrowserMultiFormatReader(hints);
-  try{
-    const result = await stillReader.decodeFromImageUrl(dataUrl);
-    const text = result.getText();
-    return /^\d{12,13}$/.test(text) ? (text.length === 12 ? '0' + text : text) : null;
-  }catch(err){ return null; }
+  for(let attempt = 0; attempt < 6; attempt++){
+    try{
+      const reader = new ZXing.BrowserMultiFormatReader(hints);
+      const result = await reader.decodeFromImageUrl(dataUrl);
+      const text = result.getText();
+      if(/^\d{12,13}$/.test(text)) return text.length === 12 ? '0' + text : text;
+    }catch(err){ /* 이번 시도만 실패, 다음 시도로 */ }
+  }
+  return null;
 }
 async function captureAndDecode_(){
   const video = document.getElementById('scan-video');
@@ -1510,7 +1515,6 @@ async function startScanCamera_(){
   try{
     if(!zxingReader_){
       const hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
       zxingReader_ = new ZXing.BrowserMultiFormatReader(hints, 100);
     }
