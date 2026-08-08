@@ -564,6 +564,7 @@ main{flex:1;padding:22px 24px 60px;}
         <div class="scan-line"></div>
         <span id="scan-hint">바코드를 10~15cm 거리에서 화면 가운데에 크고 밝게 비춰주세요</span>
       </div>
+      <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:10px;display:none;">지금 캡처해서 인식하기</button>
       <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">인식이 잘 안 되나요? 직접 ISBN 입력</button>
     </div>
 
@@ -1436,9 +1437,39 @@ function stopScanCamera_(){
   if(zxingReader_){ try{ zxingReader_.reset(); }catch(e){} }
   const video = document.getElementById('scan-video');
   video.style.display = 'none';
+  document.getElementById('scan-capture-btn').style.display = 'none';
   if(video.srcObject){
     video.srcObject.getTracks().forEach(t=>t.stop());
     video.srcObject = null;
+  }
+}
+/* 연속 자동인식이 잘 안 될 때: 지금 화면의 한 프레임을 정지사진처럼 캡처해서 별도 리더로 인식 시도
+   (연속 스캔은 저조도/블러에 약한데, 캡처는 사용자가 초점 맞을 때를 골라 찍을 수 있어 성공률이 더 높음) */
+async function captureAndDecode_(){
+  const video = document.getElementById('scan-video');
+  const hint = document.getElementById('scan-hint');
+  if(!video.videoWidth){ hint.textContent = '카메라가 아직 준비되지 않았어요. 잠시 후 다시 시도해주세요.'; return; }
+  hint.textContent = '인식 중...';
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  try{
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const stillReader = new ZXing.BrowserMultiFormatReader(hints);
+    const result = await stillReader.decodeFromImageUrl(dataUrl);
+    const text = result.getText();
+    if(/^\d{12,13}$/.test(text)){
+      stopScanCamera_();
+      lookupScannedIsbn(text.length === 12 ? '0' + text : text);
+      return;
+    }
+    hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
+  }catch(err){
+    hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
   }
 }
 async function startScanCamera_(){
@@ -1460,6 +1491,9 @@ async function startScanCamera_(){
       zxingReader_ = new ZXing.BrowserMultiFormatReader(hints, 100);
     }
     video.style.display = 'block';
+    video.addEventListener('loadedmetadata', () => {
+      document.getElementById('scan-capture-btn').style.display = 'block';
+    }, { once: true });
     await zxingReader_.decodeFromConstraints(
       { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
       video,
