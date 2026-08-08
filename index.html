@@ -562,7 +562,7 @@ main{flex:1;padding:22px 24px 60px;}
       <div class="scan-viewfinder">
         <video id="scan-video" muted playsinline autoplay style="width:100%;height:100%;object-fit:cover;display:none;"></video>
         <div class="scan-line"></div>
-        <span id="scan-hint">책 뒷면 바코드를 화면에 비춰주세요</span>
+        <span id="scan-hint">바코드를 10~15cm 거리에서 화면 가운데에 크고 밝게 비춰주세요</span>
       </div>
       <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">인식이 잘 안 되나요? 직접 ISBN 입력</button>
     </div>
@@ -1420,7 +1420,7 @@ function closeBarcode(){
   stopScanCamera_();
 }
 function restartScan(){
-  document.getElementById('scan-hint').textContent = '책 뒷면 바코드를 화면에 비춰주세요';
+  document.getElementById('scan-hint').textContent = '바코드를 10~15cm 거리에서 화면 가운데에 크고 밝게 비춰주세요';
   document.getElementById('scan-state').style.display = 'block';
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'none';
@@ -1455,19 +1455,20 @@ async function startScanCamera_(){
   try{
     if(!zxingReader_){
       const hints = new Map();
-      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]);
-      zxingReader_ = new ZXing.BrowserMultiFormatReader(hints);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      zxingReader_ = new ZXing.BrowserMultiFormatReader(hints, 100);
     }
     video.style.display = 'block';
     await zxingReader_.decodeFromConstraints(
-      { video: { facingMode: 'environment' } },
+      { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
       video,
       (result) => {
         if(!result) return;
         const text = result.getText();
-        if(/^\d{13}$/.test(text)){
+        if(/^\d{12,13}$/.test(text)){
           stopScanCamera_();
-          lookupScannedIsbn(text);
+          lookupScannedIsbn(text.length === 12 ? '0' + text : text);
         }
       }
     );
