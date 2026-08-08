@@ -564,7 +564,9 @@ main{flex:1;padding:22px 24px 60px;}
         <div class="scan-line"></div>
         <span id="scan-hint">바코드를 10~15cm 거리에서 화면 가운데에 크고 밝게 비춰주세요</span>
       </div>
-      <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:10px;display:none;">지금 캡처해서 인식하기</button>
+      <button class="add-btn" id="scan-native-btn" onclick="document.getElementById('scan-native-input').click()" style="width:100%;text-align:center;margin-top:10px;">카메라 앱으로 사진 찍어서 인식 (추천)</button>
+      <input type="file" id="scan-native-input" accept="image/*" capture="environment" style="display:none;" onchange="handleNativeCapture_(this)">
+      <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:8px;display:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);">화면 미리보기에서 캡처해서 인식</button>
       <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">인식이 잘 안 되나요? 직접 ISBN 입력</button>
     </div>
 
@@ -1445,6 +1447,18 @@ function stopScanCamera_(){
 }
 /* 연속 자동인식이 잘 안 될 때: 지금 화면의 한 프레임을 정지사진처럼 캡처해서 별도 리더로 인식 시도
    (연속 스캔은 저조도/블러에 약한데, 캡처는 사용자가 초점 맞을 때를 골라 찍을 수 있어 성공률이 더 높음) */
+/* 정지 이미지(캡처/촬영 결과)에서 바코드 텍스트 추출. 못 찾으면 null. */
+async function decodeImageDataUrl_(dataUrl){
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  const stillReader = new ZXing.BrowserMultiFormatReader(hints);
+  try{
+    const result = await stillReader.decodeFromImageUrl(dataUrl);
+    const text = result.getText();
+    return /^\d{12,13}$/.test(text) ? (text.length === 12 ? '0' + text : text) : null;
+  }catch(err){ return null; }
+}
 async function captureAndDecode_(){
   const video = document.getElementById('scan-video');
   const hint = document.getElementById('scan-hint');
@@ -1454,23 +1468,33 @@ async function captureAndDecode_(){
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-  try{
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    const stillReader = new ZXing.BrowserMultiFormatReader(hints);
-    const result = await stillReader.decodeFromImageUrl(dataUrl);
-    const text = result.getText();
-    if(/^\d{12,13}$/.test(text)){
+  const isbn13 = await decodeImageDataUrl_(canvas.toDataURL('image/jpeg', 0.92));
+  if(isbn13){
+    stopScanCamera_();
+    lookupScannedIsbn(isbn13);
+    return;
+  }
+  hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
+}
+/* 폰 기본 카메라 앱으로 찍은 사진(제대로 된 자동초점 사용)에서 인식 —
+   getUserMedia 실시간 미리보기는 매크로(근접) 초점을 잘 못 잡는 폰이 많아서, 훨씬 안정적인 대안 */
+async function handleNativeCapture_(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const hint = document.getElementById('scan-hint');
+  hint.textContent = '사진에서 인식 중...';
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const isbn13 = await decodeImageDataUrl_(reader.result);
+    input.value = '';
+    if(isbn13){
       stopScanCamera_();
-      lookupScannedIsbn(text.length === 12 ? '0' + text : text);
+      lookupScannedIsbn(isbn13);
       return;
     }
-    hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
-  }catch(err){
-    hint.textContent = '바코드를 못 찾았어요. 다시 조준하고 캡처해주세요.';
-  }
+    hint.textContent = '사진에서 바코드를 못 찾았어요. 바코드가 크고 선명하게 나오도록 다시 찍어주세요.';
+  };
+  reader.readAsDataURL(file);
 }
 async function startScanCamera_(){
   const hint = document.getElementById('scan-hint');
