@@ -147,7 +147,8 @@ main{flex:1;padding:22px 24px 60px;}
 }
 
 /* ---- 도서관 지점 필터 ---- */
-.branch-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;}
+.branch-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.branch-row{display:flex;gap:5px;flex-wrap:wrap;align-items:center;flex:1;min-width:0;}
 .branch-row-spacer{display:none;}
 .branch-row .chip-select.dragging{opacity:0.4;}
 .chip-select{
@@ -164,12 +165,13 @@ main{flex:1;padding:22px 24px 60px;}
   padding:7px 12px;cursor:pointer;
 }
 .more-branch-btn:hover{border-color:var(--accent);color:var(--accent);}
-.count-chip{
-  cursor:default;color:var(--ink-soft);background:var(--bg);margin-left:auto;
-}
 
-.list-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;}
-.want-count{font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);white-space:nowrap;}
+.list-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;}
+.count-row{margin-bottom:14px;}
+.want-count{
+  display:inline-block;font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);white-space:nowrap;
+  background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:6px 12px;
+}
 
 .sort-row{margin-bottom:14px;}
 .sort-toggle{
@@ -465,10 +467,8 @@ main{flex:1;padding:22px 24px 60px;}
 
     <!-- 읽을래용 -->
     <section class="view active" id="view-want">
-      <div class="branch-row" id="branch-row"></div>
-
-      <div class="list-toolbar">
-        <span class="want-count" id="want-count"></span>
+      <div class="branch-toolbar">
+        <div class="branch-row" id="branch-row"></div>
         <select class="sort-combo" id="want-sort-select" onchange="wantSortMode = this.value; applyBranchFilter();">
           <option value="added_desc">추가한 순 (최신)</option>
           <option value="added_asc">추가한 순 (오래된)</option>
@@ -478,6 +478,7 @@ main{flex:1;padding:22px 24px 60px;}
           <option value="callno_desc">청구기호순 (내림차순)</option>
         </select>
       </div>
+      <div class="count-row"><span class="want-count" id="want-count"></span></div>
 
       <div class="book-grid" id="book-grid">
         <div class="empty-msg">불러오는 중...</div>
@@ -493,10 +494,10 @@ main{flex:1;padding:22px 24px 60px;}
 
     <!-- 읽었어용 -->
     <section class="view" id="view-done">
-      <div class="list-toolbar">
-        <span class="want-count" id="done-count"></span>
+      <div class="list-toolbar" style="justify-content:flex-end;">
         <select class="sort-combo" id="done-year-select" onchange="renderDoneYear(this.value)"></select>
       </div>
+      <div class="count-row"><span class="want-count" id="done-count"></span></div>
       <div class="book-grid" id="done-list"><div class="empty-msg">불러오는 중...</div></div>
     </section>
 
@@ -566,11 +567,10 @@ main{flex:1;padding:22px 24px 60px;}
         <div class="scan-line"></div>
         <span id="scan-hint">바코드 전체가 잘리지 않게, 화면 절반 크기로 수평이 되게 비춰주세요</span>
       </div>
-      <button class="add-btn" id="scan-native-btn" onclick="document.getElementById('scan-native-input').click()" style="width:100%;text-align:center;margin-top:10px;">카메라 앱으로 사진 찍어서 인식 (추천)</button>
+      <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:10px;display:none;">화면 미리보기에서 캡처해서 인식</button>
+      <button class="link-btn" onclick="document.getElementById('scan-native-input').click()" style="color:var(--accent);">인식이 안 되나요? 카메라 앱으로 사진 찍어서 인식</button>
       <input type="file" id="scan-native-input" accept="image/*" capture="environment" style="display:none;" onchange="handleNativeCapture_(this)">
-      <button class="add-btn" id="scan-capture-btn" onclick="captureAndDecode_()" style="width:100%;text-align:center;margin-top:8px;display:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);">화면 미리보기에서 캡처해서 인식</button>
-      <button class="link-btn" id="scan-live-btn" onclick="startLivePreview_()" style="color:var(--accent);">실시간 카메라 미리보기로 인식</button>
-      <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">인식이 잘 안 되나요? 직접 ISBN 입력</button>
+      <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">직접 ISBN 입력</button>
     </div>
 
     <div class="scan-manual" id="scan-manual" style="display:none;">
@@ -1195,7 +1195,7 @@ async function loadStats(){
         `<span>${ (year===currentYear && i > now.getMonth()) ? '–' : c }</span>`
       ).join('');
       const cls = year === currentYear ? 'mt-this' : 'mt-last';
-      return `<div class="mt-row ${cls}"><span class="mt-rlabel">${year}년(권)</span>${cells}<span class="mt-total">${total}</span></div>`;
+      return `<div class="mt-row ${cls}"><span class="mt-rlabel">${String(year).slice(2)}년</span>${cells}<span class="mt-total">${total}</span></div>`;
     }).join('');
   }catch(err){ showApiError(err); }
 }
@@ -1250,10 +1250,6 @@ function renderBranchRow_(){
   moreBtn.addEventListener('click', ()=>{ branchListExpanded = !branchListExpanded; renderBranchRow_(); });
   row.appendChild(moreBtn);
 
-  const countChip = document.createElement('span');
-  countChip.className = 'chip-select count-chip';
-  countChip.id = 'want-count';
-  row.appendChild(countChip);
   renderWantCount();
 
   if(branchListExpanded) initBranchDrag_(row);
@@ -1425,23 +1421,12 @@ function closeBarcode(){
   document.getElementById('barcode-overlay').classList.remove('active');
   stopScanCamera_();
 }
-/* 실시간 카메라 미리보기를 켜지 않고 스캔 화면으로 초기화만 함.
-   예전엔 모달 열 때마다 자동으로 실시간 카메라를 켰는데, 그러면 화면 뒤에서 계속 흔들리는 흐릿한
-   영상이 배경에 깔려서 "인식이 흐릿해서 안 된다"는 오해를 줬음(실제로는 촬영한 사진이 아니라 그
-   배경 영상이 흐릿했던 것). 이제 카메라는 사용자가 명시적으로 요청할 때만 켬. */
 function restartScan(){
-  stopScanCamera_();
   document.getElementById('scan-hint').textContent = '바코드 전체가 잘리지 않게, 화면 절반 크기로 수평이 되게 비춰주세요';
   document.getElementById('scan-state').style.display = 'block';
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'none';
   document.getElementById('scan-isbn-input').value = '';
-}
-function startLivePreview_(){
-  document.getElementById('scan-hint').textContent = '바코드를 10~15cm 거리에서 화면 가운데에 크고 밝게 비춰주세요';
-  document.getElementById('scan-state').style.display = 'block';
-  document.getElementById('scan-manual').style.display = 'none';
-  document.getElementById('scan-found').style.display = 'none';
   startScanCamera_();
 }
 function showManualIsbn(){
