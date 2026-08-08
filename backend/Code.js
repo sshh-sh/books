@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -637,7 +637,9 @@ function itemLookupAladin_(isbn13) {
     title: cleanTitle_(it.title),
     author: it.author,
     isbn13: it.isbn13,
+    pubDate: it.pubDate,
     cover: it.cover,
+    description: it.description,
     category: guessCategory_(it.categoryName),
     country: ''
   };
@@ -677,8 +679,16 @@ function bulkImportReadBooks(items) {
 
 /* ---------------- UserBooks (읽을래용/읽는중이용/읽었어용) ---------------- */
 
+/** 같은 책(book_id)이 같은 상태(읽고싶음/읽는중/읽음)로 이미 등록돼 있으면 중복 등록을 막음 */
+function assertNotDuplicateUserBook_(bookId, status) {
+  const rows = sheetToObjects_(getSheet_(SHEETS.USER_BOOKS));
+  const dup = rows.some(r => Number(r.book_id) === Number(bookId) && r.status === status);
+  if (dup) throw new Error('이미 등록된 책이에요.');
+}
+
 function addToWantList(bookData, reasonNote) {
   const bookId = findOrCreateBook_(bookData);
+  assertNotDuplicateUserBook_(bookId, '읽고싶음');
   const sheet = getSheet_(SHEETS.USER_BOOKS);
   const id = nextId_(sheet);
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -688,6 +698,7 @@ function addToWantList(bookData, reasonNote) {
 
 function addToReadingList(bookData, reasonNote, source) {
   const bookId = findOrCreateBook_(bookData);
+  assertNotDuplicateUserBook_(bookId, '읽는중');
   const sheet = getSheet_(SHEETS.USER_BOOKS);
   const id = nextId_(sheet);
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -703,6 +714,7 @@ function addToReadingList(bookData, reasonNote, source) {
  */
 function addFinishedBookDirect(bookData, note, readDate) {
   const bookId = findOrCreateBook_(bookData);
+  assertNotDuplicateUserBook_(bookId, '읽음');
   const sheet = getSheet_(SHEETS.USER_BOOKS);
   const id = nextId_(sheet);
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -864,8 +876,14 @@ function getStats() {
 
 /* ---------------- JSON API (깃허브 페이지에서 fetch로 호출) ---------------- */
 
+/** 바코드 스캔/직접 입력한 ISBN13으로 알라딘에서 책 1건 조회. 못 찾으면 null. */
+function lookupByIsbn(isbn13) {
+  return itemLookupAladin_(String(isbn13 || '').replace(/[^0-9Xx]/g, ''));
+}
+
 const API_ACTIONS = {
   searchAladin: (p) => searchAladin(p.query),
+  lookupByIsbn: (p) => lookupByIsbn(p.isbn13),
   getWantList: () => getWantList(),
   getReadingList: () => getReadingList(),
   getDoneList: () => getDoneList(),

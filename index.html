@@ -260,9 +260,10 @@ main{flex:1;padding:22px 24px 60px;}
 }
 .reason-input textarea{
   width:100%;border:none;background:none;color:var(--ink);font-family:var(--pen-font);
-  font-size:0.85rem;letter-spacing:-0.02em;resize:none;padding:0;line-height:1.4;
+  font-size:1.05rem;letter-spacing:-0.02em;resize:none;padding:0;line-height:1.4;
 }
-.reason-input textarea::placeholder{color:var(--ink-soft);font-family:var(--sans);font-size:0.8rem;}
+.reason-input textarea.empty{min-height:1.4em;}
+.reason-input textarea::placeholder{color:var(--ink-soft);font-family:var(--sans);font-size:0.95rem;}
 .reason-input textarea:focus-visible{outline:none;}
 .status-pill{
   font-size:0.68rem;padding:2px 7px;border-radius:999px;font-weight:600;width:fit-content;
@@ -314,7 +315,7 @@ main{flex:1;padding:22px 24px 60px;}
   border:1px solid var(--line);
 }
 .detail-head{display:flex;gap:18px;}
-.detail-head .cover{width:84px;height:120px;font-size:0.75rem;}
+.detail-head .cover{width:84px;height:120px;font-size:0.75rem;object-fit:cover;}
 .detail-title{font-family:var(--display);font-size:1.3rem;font-weight:800;letter-spacing:-0.01em;}
 .detail-author{color:var(--ink-soft);font-size:0.9rem;margin-top:4px;}
 .close-x{margin-left:auto;background:none;border:none;color:var(--ink-soft);font-size:1.3rem;cursor:pointer;line-height:1;}
@@ -339,7 +340,7 @@ main{flex:1;padding:22px 24px 60px;}
 }
 .memo-input{
   width:100%;margin-top:2px;padding:9px 11px;border-radius:7px;border:1px solid var(--line);
-  background:var(--bg);color:var(--ink);font-size:0.85rem;font-family:var(--sans);resize:vertical;
+  background:var(--bg);color:var(--ink);font-size:1rem;font-family:var(--sans);resize:vertical;
 }
 .link-btn{
   background:none;border:none;color:var(--danger);font-size:0.8rem;cursor:pointer;
@@ -355,7 +356,12 @@ main{flex:1;padding:22px 24px 60px;}
 }
 .scan-line{
   position:absolute;left:8%;right:8%;height:2px;background:var(--accent);
-  box-shadow:0 0 8px var(--accent);animation:scan-sweep 1.8s ease-in-out infinite;
+  box-shadow:0 0 8px var(--accent);animation:scan-sweep 1.8s ease-in-out infinite;z-index:2;
+}
+#scan-video{position:absolute;inset:0;width:100%;height:100%;}
+#scan-hint{
+  position:relative;z-index:2;background:rgba(0,0,0,0.55);color:#fff;padding:4px 10px;
+  border-radius:6px;
 }
 @keyframes scan-sweep{
   0%{top:15%;} 50%{top:85%;} 100%{top:15%;}
@@ -459,6 +465,18 @@ main{flex:1;padding:22px 24px 60px;}
     <section class="view active" id="view-want">
       <div class="branch-row" id="branch-row"></div>
 
+      <div class="list-toolbar">
+        <span class="want-count" id="want-count"></span>
+        <select class="sort-combo" id="want-sort-select" onchange="wantSortMode = this.value; applyBranchFilter();">
+          <option value="added_desc">추가한 순 (최신)</option>
+          <option value="added_asc">추가한 순 (오래된)</option>
+          <option value="title_asc">책 제목순 (오름차순)</option>
+          <option value="title_desc">책 제목순 (내림차순)</option>
+          <option value="callno_asc">청구기호순 (오름차순)</option>
+          <option value="callno_desc">청구기호순 (내림차순)</option>
+        </select>
+      </div>
+
       <div class="book-grid" id="book-grid">
         <div class="empty-msg">불러오는 중...</div>
       </div>
@@ -501,35 +519,33 @@ main{flex:1;padding:22px 24px 60px;}
   <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v...</span></footer>
 </div>
 
-<!-- DETAIL MODAL (읽을래용) -->
+<!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
 <div class="overlay" id="detail-overlay">
   <div class="detail-card">
     <div class="detail-head">
-      <div class="cover">인생론</div>
+      <img class="cover" id="detail-cover" src="" alt="">
       <div>
         <div style="display:flex;">
-          <div class="detail-title">인생론</div>
+          <div class="detail-title" id="detail-title">-</div>
           <button class="close-x" onclick="closeDetail()">×</button>
         </div>
-        <div class="detail-author">아르투어 쇼펜하우어 · 1851</div>
+        <div class="detail-author" id="detail-author">-</div>
       </div>
     </div>
 
     <div class="field-block">
       <div class="field-label">한줄 줄거리</div>
-      <div class="note-box">삶의 고통과 권태 사이에서 인간이 어떻게 살아야 하는가를 다룬 쇼펜하우어의 대표 에세이.</div>
+      <div class="note-box" id="detail-blurb">불러오는 중...</div>
     </div>
 
     <div class="field-block">
-      <div class="field-label">도서관 소장 현황 (용인시)</div>
-      <div class="lib-row"><span class="lib-name">수지도서관</span><span class="lib-callno">160.1</span><span class="avail-tag ok">대출가능</span></div>
-      <div class="lib-row"><span class="lib-name">죽전도서관</span><span class="lib-callno">160.1</span><span class="avail-tag no">대출중</span></div>
-      <div class="lib-row"><span class="lib-name">용인중앙도서관</span><span class="lib-callno">160.13</span><span class="avail-tag ok">대출가능</span></div>
+      <div class="field-label">도서관 소장 현황</div>
+      <div id="detail-libs"><div class="empty-msg" style="padding:4px 0;text-align:left;">불러오는 중...</div></div>
     </div>
 
-    <div class="field-block">
-      <div class="field-label">읽고 싶은 이유</div>
-      <div class="note-box">서점에서 표지 보고 충동적으로 담음. 친구 지영이 추천.</div>
+    <div class="field-block" id="detail-note-block">
+      <div class="field-label" id="detail-note-label">메모</div>
+      <div class="note-box" id="detail-note">-</div>
     </div>
   </div>
 </div>
@@ -544,8 +560,9 @@ main{flex:1;padding:22px 24px 60px;}
 
     <div class="scan-state" id="scan-state">
       <div class="scan-viewfinder">
+        <video id="scan-video" muted playsinline autoplay style="width:100%;height:100%;object-fit:cover;display:none;"></video>
         <div class="scan-line"></div>
-        <span>책 뒷면 바코드를 화면에 비춰주세요</span>
+        <span id="scan-hint">책 뒷면 바코드를 화면에 비춰주세요</span>
       </div>
       <button class="link-btn" onclick="showManualIsbn()" style="color:var(--accent);">인식이 잘 안 되나요? 직접 ISBN 입력</button>
     </div>
@@ -553,20 +570,21 @@ main{flex:1;padding:22px 24px 60px;}
     <div class="scan-manual" id="scan-manual" style="display:none;">
       <div class="field-label" style="margin-top:6px;">ISBN 직접 입력</div>
       <div class="search-bar">
-        <input type="text" placeholder="ISBN 13자리 입력">
-        <button onclick="showScanFound()">검색</button>
+        <input type="text" id="scan-isbn-input" placeholder="ISBN 13자리 입력" inputmode="numeric">
+        <button onclick="lookupScannedIsbn(document.getElementById('scan-isbn-input').value)">검색</button>
       </div>
+      <button class="link-btn" onclick="restartScan()" style="color:var(--accent);">카메라로 다시 스캔하기</button>
     </div>
 
     <div class="scan-found" id="scan-found" style="display:none;">
       <div class="field-label" style="margin-top:6px;">인식된 책</div>
       <div class="result-row" style="border:1px solid var(--line);border-radius:8px;padding:12px;">
-        <div class="cover">아몬드</div>
+        <img class="cover" id="scan-found-cover" src="" alt="">
         <div class="book-meta">
-          <div class="book-title">아몬드</div>
-          <div class="book-author-year">손원평 · 2017</div>
+          <div class="book-title" id="scan-found-title">-</div>
+          <div class="book-author-year" id="scan-found-author">-</div>
         </div>
-        <button class="add-btn">+ 담기</button>
+        <button class="add-btn" id="scan-found-addbtn" onclick="addScannedBook()">+ 담기</button>
       </div>
       <button class="link-btn" onclick="restartScan()">다시 스캔하기</button>
     </div>
@@ -624,6 +642,7 @@ main{flex:1;padding:22px 24px 60px;}
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script>
 /* ============ API 연동 (깃허브 페이지 → 앱스 스크립트) ============ */
 const API_BASE = 'https://script.google.com/macros/s/AKfycbzzNbPguhf1dhI2BGgK_KlvPb154RVUB0khLF-2IpGIwRzqndTVYYk5gOYPhRM_qNa2/exec';
@@ -651,6 +670,11 @@ function escapeHtml(str){
 function showApiError(err){
   console.error(err);
   alert('문제가 생겼어요: ' + (err && err.message ? err.message : err));
+}
+/* 담기/추가 실패 처리 — 중복 등록 시도는 별도 안내(alert)만, 그 외 에러는 기존 방식대로 */
+function handleAddError_(err){
+  if(err && err.message === '이미 등록된 책이에요.'){ alert('이미 등록된 책이에요.'); return; }
+  showApiError(err);
 }
 
 /* ============ 탭 전환 ============ */
@@ -736,7 +760,7 @@ async function addWant(i){
     document.getElementById('search-results').style.display = 'none';
     document.getElementById('search-input').value = '';
     loadWant();
-  }catch(err){ showApiError(err); }
+  }catch(err){ handleAddError_(err); }
 }
 
 /* ============ 읽을래용: 목록 ============ */
@@ -744,6 +768,7 @@ let wantCache = [];
 let bookLibrariesMap = {}; // book_id -> ['남사','수지',...] (보유 도서관 이름 목록, 필터용)
 let bookCallnoMap = {}; // book_id -> {'남사':'813.6', '용인중앙':'813.62'} (지점별 청구기호, 남사/용인중앙만)
 let activeBranchFilter = null; // null이면 전체
+let wantSortMode = 'added_desc'; // added_desc|added_asc|title_asc|title_desc|callno_asc|callno_desc
 
 function renderWantCount(){
   const el = document.getElementById('want-count');
@@ -752,7 +777,7 @@ function renderWantCount(){
 
 function wantCardHtml(b){
   return `
-    <div class="book-card" data-user-book-id="${b.userBook.id}" data-book-id="${b.id}">
+    <div class="book-card" data-user-book-id="${b.userBook.id}" data-book-id="${b.id}" onclick="openDetail('want', ${b.userBook.id})">
       <div class="cover-col">
         <img class="cover" src="${b.cover_url||''}" alt="">
         <label class="borrow-check" onclick="event.stopPropagation()">
@@ -771,8 +796,8 @@ function wantCardHtml(b){
         <div class="book-author-year">${escapeHtml(b.author)}</div>
         <div class="avail-lines" id="avail-${b.userBook.id}"><div class="empty-msg" style="padding:2px 0;text-align:left;">도서관 정보 확인 중...</div></div>
         <div class="callno" id="callno-${b.userBook.id}"></div>
-        <div class="reason-input">
-          <textarea rows="2" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
+        <div class="reason-input" onclick="event.stopPropagation()">
+          <textarea ${reasonRowsAttr_(b.userBook.reason_note, 2)} oninput="adjustReasonRows_(this)" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
         </div>
       </div>
     </div>
@@ -879,6 +904,15 @@ async function removeWantThis(userBookId, btn){
 async function saveReason(userBookId, value){
   try{ await apiPost('updateReasonNote', { userBookId, note: value }); }catch(err){ showApiError(err); }
 }
+/* 내용이 없으면 칸을 1줄로 줄이고, 내용이 있으면 원래 줄 수로 되돌림 */
+function reasonRowsAttr_(value, fullRows){
+  const has = value && String(value).trim();
+  return `rows="${has ? fullRows : 1}" data-full-rows="${fullRows}"`;
+}
+function adjustReasonRows_(textarea){
+  const fullRows = Number(textarea.dataset.fullRows) || 2;
+  textarea.rows = textarea.value.trim() ? fullRows : 1;
+}
 
 /* ============ 읽는중이용 ============ */
 let readingCache = [];
@@ -889,7 +923,7 @@ async function loadReading(){
     readingCache = list;
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">읽는 중인 책이 없어요.</div>'; return; }
     grid.innerHTML = list.map(b => `
-      <div class="book-card">
+      <div class="book-card" onclick="openDetail('reading', ${b.userBook.id})">
         <div class="cover-col">
           <img class="cover" src="${b.cover_url||''}" alt="">
           <label class="borrow-check" onclick="event.stopPropagation()">
@@ -907,8 +941,8 @@ async function loadReading(){
         <div class="book-meta">
           <div class="book-title">${escapeHtml(b.title)}</div>
           <div class="book-author-year">${escapeHtml(b.author)}</div>
-          <div class="reason-input">
-            <textarea rows="2" placeholder="메모" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
+          <div class="reason-input" onclick="event.stopPropagation()">
+            <textarea ${reasonRowsAttr_(b.userBook.reason_note, 2)} placeholder="메모" oninput="adjustReasonRows_(this)" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
           </div>
         </div>
       </div>
@@ -958,7 +992,7 @@ async function addReadingFromSearch(i){
     document.getElementById('search-input').value = '';
     toggleSearch();
     loadReading();
-  }catch(err){ showApiError(err); }
+  }catch(err){ handleAddError_(err); }
 }
 function openDoneAdd(i){
   doneAddPendingIndex_ = i;
@@ -982,7 +1016,7 @@ async function confirmDoneAdd(){
     document.getElementById('search-input').value = '';
     toggleSearch();
     loadDone(); loadStats();
-  }catch(err){ showApiError(err); }
+  }catch(err){ handleAddError_(err); }
 }
 
 /* ============ 카드 ⋯메뉴: 수정(제목/저자, 읽었어용은 날짜도) ============ */
@@ -1052,7 +1086,7 @@ function formatShortDate_(dateStr){
 }
 function doneCardHtml(b){
   return `
-    <div class="book-card ${b.userBook.dropped?'dropped':''}" data-user-book-id="${b.userBook.id}">
+    <div class="book-card ${b.userBook.dropped?'dropped':''}" data-user-book-id="${b.userBook.id}" onclick="openDetail('done', ${b.userBook.id})">
       <div class="cover-col">
         <img class="cover" src="${b.cover_url||''}" alt="">
         <div class="kebab-wrap">
@@ -1067,8 +1101,8 @@ function doneCardHtml(b){
         <div class="book-title">${escapeHtml(b.title)}</div>
         <div class="book-author-year">${escapeHtml(b.author)}</div>
         <div class="avail-badge">${b.userBook.dropped ? '중도포기' : formatShortDate_(b.userBook.read_date)}</div>
-        <div class="reason-input">
-          <textarea rows="3" placeholder="감상 메모" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
+        <div class="reason-input" onclick="event.stopPropagation()">
+          <textarea ${reasonRowsAttr_(b.userBook.reason_note, 3)} placeholder="감상 메모" oninput="adjustReasonRows_(this)" onblur="saveReason(${b.userBook.id}, this.value)">${escapeHtml(b.userBook.reason_note)}</textarea>
         </div>
       </div>
     </div>
@@ -1240,31 +1274,36 @@ function updateCallnoTags_(){
   });
 }
 
+/* 청구기호순 정렬용: 도서관 필터가 걸려있으면 그 도서관 청구기호, 아니면 알고 있는 청구기호 중 아무거나 사용 */
+function callnoForSort_(bookId){
+  const map = bookCallnoMap[bookId] || {};
+  if(activeBranchFilter && map[activeBranchFilter]) return map[activeBranchFilter];
+  const vals = Object.keys(map).map(k=>map[k]).filter(Boolean);
+  return vals[0] || '';
+}
 function applyBranchFilter(){
   const grid = document.getElementById('book-grid');
   const cards = [...grid.querySelectorAll('.book-card')];
 
-  if(activeBranchFilter === null){
-    cards.forEach(c=>{ c.style.display = ''; });
-    cards.sort((c1,c2)=>{
-      const b1 = findWantBook_(c1.dataset.userBookId), b2 = findWantBook_(c2.dataset.userBookId);
-      return new Date((b2&&b2.userBook.added_date)||0) - new Date((b1&&b1.userBook.added_date)||0);
-    });
-    cards.forEach(c=>grid.appendChild(c));
-    updateCallnoTags_();
-    return;
-  }
-
   cards.forEach(card=>{
+    if(activeBranchFilter === null){ card.style.display = ''; return; }
     const libs = bookLibrariesMap[card.dataset.bookId];
     const owns = Array.isArray(libs) && libs.indexOf(activeBranchFilter) !== -1;
     card.style.display = owns ? '' : 'none';
   });
+
   const visible = cards.filter(c=>c.style.display !== 'none');
   visible.sort((c1,c2)=>{
-    const cn1 = (bookCallnoMap[c1.dataset.bookId]||{})[activeBranchFilter] || '';
-    const cn2 = (bookCallnoMap[c2.dataset.bookId]||{})[activeBranchFilter] || '';
-    return callnoCompare_(cn1, cn2);
+    const b1 = findWantBook_(c1.dataset.userBookId), b2 = findWantBook_(c2.dataset.userBookId);
+    switch(wantSortMode){
+      case 'title_asc': return (b1&&b1.title||'').localeCompare(b2&&b2.title||'', 'ko');
+      case 'title_desc': return (b2&&b2.title||'').localeCompare(b1&&b1.title||'', 'ko');
+      case 'added_asc': return new Date((b1&&b1.userBook.added_date)||0) - new Date((b2&&b2.userBook.added_date)||0);
+      case 'callno_asc': return callnoCompare_(callnoForSort_(c1.dataset.bookId), callnoForSort_(c2.dataset.bookId));
+      case 'callno_desc': return callnoCompare_(callnoForSort_(c2.dataset.bookId), callnoForSort_(c1.dataset.bookId));
+      case 'added_desc':
+      default: return new Date((b2&&b2.userBook.added_date)||0) - new Date((b1&&b1.userBook.added_date)||0);
+    }
   });
   visible.forEach(c=>grid.appendChild(c));
   updateCallnoTags_();
@@ -1316,34 +1355,172 @@ async function saveBranchOrder_(row){
 
 /* ============ 정렬 콤보 ============ */
 /* ============ 상세 모달(정보 표시만) ============ */
-function openDetail(){ document.getElementById('detail-overlay').classList.add('active'); }
-function closeDetail(){ document.getElementById('detail-overlay').classList.remove('active'); }
+/* ============ 책 상세정보 모달 (읽을래용/읽는중이용/읽었어용 공통) ============ */
+function findBookByKind_(kind, userBookId){
+  const cache = kind==='want' ? wantCache : kind==='reading' ? readingCache : doneCache;
+  return cache.find(b => b.userBook.id === userBookId);
+}
+let detailCtx_ = null;
+async function openDetail(kind, userBookId){
+  const b = findBookByKind_(kind, userBookId);
+  if(!b) return;
+  detailCtx_ = { kind, userBookId };
+  document.getElementById('detail-cover').src = b.cover_url || '';
+  document.getElementById('detail-title').textContent = b.title;
+  document.getElementById('detail-author').textContent = b.author || '';
+  const noteLabel = kind==='want' ? '읽고 싶은 이유' : kind==='reading' ? '메모' : '감상 메모';
+  document.getElementById('detail-note-label').textContent = noteLabel;
+  const note = (b.userBook.reason_note || '').trim();
+  document.getElementById('detail-note').textContent = note || '아직 없어요.';
+  document.getElementById('detail-blurb').textContent = '불러오는 중...';
+  renderDetailLibsFromRaw_(b);
+  document.getElementById('detail-overlay').classList.add('active');
 
-/* ============ 바코드 모달 (데모: 실제 카메라 인식은 추후 구현) ============ */
-let scanTimer = null;
+  if(!b.isbn){ document.getElementById('detail-blurb').textContent = '줄거리 정보가 없어요.'; return; }
+  try{
+    const info = await apiGet('lookupByIsbn', { isbn13: b.isbn });
+    if(!detailCtx_ || detailCtx_.kind !== kind || detailCtx_.userBookId !== userBookId) return;
+    document.getElementById('detail-blurb').textContent = (info && info.description && info.description.trim()) ? info.description : '줄거리 정보가 없어요.';
+  }catch(err){
+    if(!detailCtx_ || detailCtx_.kind !== kind || detailCtx_.userBookId !== userBookId) return;
+    document.getElementById('detail-blurb').textContent = '줄거리를 못 불러왔어요.';
+  }
+}
+function renderDetailLibsFromRaw_(b){
+  const libs = parseAvailJson_(b.avail_json);
+  if(libs !== null){ renderDetailLibsFromArr_(libs); return; }
+  document.getElementById('detail-libs').innerHTML = '<div class="empty-msg" style="padding:4px 0;text-align:left;">불러오는 중...</div>';
+  if(!b.isbn) return;
+  apiGet('getBookAvailabilityCached', { isbn13: b.isbn, bookId: b.id }).then(fresh=>{
+    if(detailCtx_ && detailCtx_.userBookId === b.userBook.id) renderDetailLibsFromArr_(fresh);
+  }).catch(()=>{
+    if(detailCtx_ && detailCtx_.userBookId === b.userBook.id){
+      document.getElementById('detail-libs').innerHTML = '<div class="empty-msg" style="padding:4px 0;text-align:left;">도서관 정보를 못 불러왔어요.</div>';
+    }
+  });
+}
+function renderDetailLibsFromArr_(libs){
+  const box = document.getElementById('detail-libs');
+  if(!libs || !libs.length){ box.innerHTML = '<div class="empty-msg" style="padding:4px 0;text-align:left;">보유 도서관 정보가 없어요.</div>'; return; }
+  box.innerHTML = libs.map(l => `
+    <div class="lib-row"><span class="lib-name">${escapeHtml(l.libraryName)}</span><span class="lib-callno">${escapeHtml(l.callno||'')}</span><span class="avail-tag ${l.available?'ok':'no'}">${l.available?'대출가능':'대출중'}</span></div>
+  `).join('');
+}
+function closeDetail(){ document.getElementById('detail-overlay').classList.remove('active'); detailCtx_ = null; }
+
+/* ============ 바코드 모달 (ZXing으로 카메라에서 실제 바코드 인식) ============ */
+let zxingReader_ = null;
+let scanCache_ = null; // 인식/조회된 책 정보(알라딘 형식)
 function openBarcode(){
   document.getElementById('barcode-overlay').classList.add('active');
   restartScan();
 }
 function closeBarcode(){
   document.getElementById('barcode-overlay').classList.remove('active');
-  clearTimeout(scanTimer);
+  stopScanCamera_();
 }
 function restartScan(){
-  clearTimeout(scanTimer);
+  document.getElementById('scan-hint').textContent = '책 뒷면 바코드를 화면에 비춰주세요';
   document.getElementById('scan-state').style.display = 'block';
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'none';
+  document.getElementById('scan-isbn-input').value = '';
+  startScanCamera_();
 }
 function showManualIsbn(){
-  clearTimeout(scanTimer);
+  stopScanCamera_();
   document.getElementById('scan-state').style.display = 'none';
   document.getElementById('scan-manual').style.display = 'block';
 }
+function stopScanCamera_(){
+  if(zxingReader_){ try{ zxingReader_.reset(); }catch(e){} }
+  const video = document.getElementById('scan-video');
+  video.style.display = 'none';
+  if(video.srcObject){
+    video.srcObject.getTracks().forEach(t=>t.stop());
+    video.srcObject = null;
+  }
+}
+async function startScanCamera_(){
+  const hint = document.getElementById('scan-hint');
+  const video = document.getElementById('scan-video');
+  if(typeof ZXing === 'undefined'){
+    hint.textContent = '바코드 인식 기능을 불러오지 못했어요. 직접 ISBN을 입력해주세요.';
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    hint.textContent = '이 브라우저는 카메라를 지원하지 않아요. 직접 ISBN을 입력해주세요.';
+    return;
+  }
+  try{
+    if(!zxingReader_){
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]);
+      zxingReader_ = new ZXing.BrowserMultiFormatReader(hints);
+    }
+    video.style.display = 'block';
+    await zxingReader_.decodeFromConstraints(
+      { video: { facingMode: 'environment' } },
+      video,
+      (result) => {
+        if(!result) return;
+        const text = result.getText();
+        if(/^\d{13}$/.test(text)){
+          stopScanCamera_();
+          lookupScannedIsbn(text);
+        }
+      }
+    );
+  }catch(err){
+    console.error(err);
+    hint.textContent = '카메라를 열 수 없어요. 직접 ISBN을 입력해주세요.';
+  }
+}
+async function lookupScannedIsbn(rawIsbn){
+  const isbn13 = String(rawIsbn||'').replace(/[^0-9Xx]/g,'');
+  if(isbn13.length !== 13){ alert('ISBN 13자리를 정확히 입력해주세요.'); return; }
+  stopScanCamera_();
+  document.getElementById('scan-state').style.display = 'none';
+  document.getElementById('scan-manual').style.display = 'none';
+  document.getElementById('scan-found').style.display = 'none';
+  try{
+    const item = await apiGet('lookupByIsbn', { isbn13 });
+    if(!item){ alert('해당 ISBN으로 책을 찾지 못했어요.'); restartScan(); return; }
+    scanCache_ = item;
+    showScanFound();
+  }catch(err){ showApiError(err); restartScan(); }
+}
 function showScanFound(){
+  const item = scanCache_;
   document.getElementById('scan-state').style.display = 'none';
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'block';
+  document.getElementById('scan-found-cover').src = item.cover || '';
+  document.getElementById('scan-found-title').textContent = item.title;
+  document.getElementById('scan-found-author').textContent = (item.author||'') + (item.pubDate ? ' · ' + item.pubDate.slice(0,4) : '');
+  const view = activeTabView_();
+  document.getElementById('scan-found-addbtn').textContent = view === 'reading' ? '+ 읽는중 추가' : view === 'done' ? '+ 읽음 추가' : '+ 담기';
+}
+async function addScannedBook(){
+  const item = scanCache_;
+  if(!item) return;
+  const view = activeTabView_();
+  if(view === 'done'){
+    closeBarcode();
+    searchCache = [item];
+    openDoneAdd(0);
+    return;
+  }
+  try{
+    if(view === 'reading'){
+      await apiPost('addToReadingList', { bookData: item, reasonNote: '' });
+      loadReading();
+    } else {
+      await apiPost('addToWantList', { bookData: item, reasonNote: '' });
+      loadWant();
+    }
+    closeBarcode();
+  }catch(err){ handleAddError_(err); }
 }
 
 /* ============ 초기 로드 ============ */
