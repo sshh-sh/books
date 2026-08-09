@@ -417,9 +417,17 @@ main{flex:1;padding:22px 24px 60px;}
 .stat-label{font-size:0.78rem;color:var(--ink-soft);margin-top:2px;}
 .mini-heading{font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);font-weight:600;}
 .month-table{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 10px;}
-.mt-grid{display:grid;grid-template-columns:28px repeat(12,1fr);gap:3px;align-items:center;}
+/* 맨 오른쪽에 연도별 합계 열(계)을 두느라 12칸이 좁아져서 gap을 3→2px로 줄여 숫자 공간을 확보 */
+.mt-grid{display:grid;grid-template-columns:25px repeat(12,1fr) 27px;gap:2px;align-items:center;}
 .mt-grid .mt-mlabel{font-size:0.62rem;color:var(--ink-soft);text-align:center;}
-.mt-grid .mt-ylabel{font-size:0.72rem;color:var(--ink-soft);white-space:nowrap;}
+.mt-grid .mt-ylabel{font-size:0.7rem;color:var(--ink-soft);white-space:nowrap;}
+/* 합계 열 — 격자와 구분되게 왼쪽에 선을 두고 강조색 숫자로 */
+.mt-thead{font-size:0.62rem;color:var(--ink-soft);text-align:center;}
+.mt-total{
+  display:flex;align-items:center;justify-content:center;height:100%;
+  font-size:0.72rem;font-weight:700;color:var(--accent);
+  font-variant-numeric:tabular-nums;border-left:1px solid var(--line);
+}
 .mt-cell{
   aspect-ratio:1;border-radius:5px;display:flex;align-items:center;justify-content:center;
   font-size:0.68rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-soft);
@@ -547,7 +555,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.11</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.12</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -1247,7 +1255,8 @@ async function loadStats(){
     const maxCount = Math.max(1, ...yearMonthCounts.flatMap(y=>y.monthCounts));
 
     let gridHtml = '<span></span>' +
-      Array.from({length:12}, (_,i)=>`<span class="mt-mlabel">${i+1}</span>`).join('');
+      Array.from({length:12}, (_,i)=>`<span class="mt-mlabel">${i+1}</span>`).join('') +
+      '<span class="mt-thead">계</span>';
     yearMonthCounts.forEach(({year, monthCounts})=>{
       gridHtml += `<span class="mt-ylabel">${String(year).slice(2)}년</span>`;
       monthCounts.forEach((c,i)=>{
@@ -1256,6 +1265,7 @@ async function loadStats(){
         const textColor = alpha > 0.5 ? '#fff' : 'var(--ink-soft)';
         gridHtml += `<div class="mt-cell" style="background:rgba(184,33,94,${alpha.toFixed(2)});color:${textColor};">${c || ''}</div>`;
       });
+      gridHtml += `<div class="mt-total">${monthCounts.reduce((a,b)=>a+b,0)}</div>`;
     });
     document.getElementById('mt-grid').innerHTML = gridHtml;
   }catch(err){ showApiError(err); }
