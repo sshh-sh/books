@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v1';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
