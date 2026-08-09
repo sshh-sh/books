@@ -386,6 +386,26 @@ main{flex:1;padding:22px 24px 60px;}
   0%{transform:scale(1.3);opacity:1;}
   100%{transform:scale(0.9);opacity:0;}
 }
+/* 카메라 조작 컨트롤(카메라 선택/줌/플래시) — 고정초점 렌즈를 우회하기 위한 수단들 */
+.scan-controls{display:none;margin-top:10px;}
+.scan-viewfinder.live ~ .scan-controls{display:block;}
+.scan-ctl-row{display:flex;align-items:center;gap:8px;margin-top:8px;}
+.scan-ctl-label{font-size:0.75rem;color:var(--ink-soft);white-space:nowrap;min-width:52px;}
+.scan-ctl-row select{
+  flex:1;min-width:0;font-family:var(--sans);font-size:0.8rem;padding:6px 8px;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);
+}
+.scan-ctl-row input[type=range]{flex:1;min-width:0;accent-color:var(--accent);}
+.scan-torch-btn{
+  font-family:var(--sans);font-size:0.78rem;padding:6px 10px;border:1px solid var(--line);
+  border-radius:8px;background:var(--surface);color:var(--ink);cursor:pointer;white-space:nowrap;
+}
+.scan-torch-btn.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+.scan-diag{
+  margin-top:10px;font-family:var(--mono);font-size:0.68rem;line-height:1.5;
+  color:var(--ink-soft);background:var(--bg);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;word-break:break-all;white-space:pre-wrap;
+}
 
 /* ---- 종합해용 ---- */
 .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:26px;}
@@ -525,7 +545,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.9</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.10</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -572,6 +592,18 @@ main{flex:1;padding:22px 24px 60px;}
         <video id="scan-video" muted playsinline autoplay style="width:100%;height:100%;object-fit:cover;display:none;"></video>
         <div class="scan-line"></div>
         <span id="scan-hint">바코드 전체가 잘리지 않게, 화면 절반 크기로 수평이 되게 비춰주세요</span>
+      </div>
+      <div class="scan-controls" id="scan-controls">
+        <div class="scan-ctl-row" id="scan-cam-row" style="display:none;">
+          <span class="scan-ctl-label">카메라</span>
+          <select id="scan-cam-select" onchange="switchScanCamera_(this.value)"></select>
+        </div>
+        <div class="scan-ctl-row" id="scan-zoom-row" style="display:none;">
+          <span class="scan-ctl-label">줌 <span id="scan-zoom-val"></span></span>
+          <input type="range" id="scan-zoom-range" oninput="applyScanZoom_(this.value)">
+          <button class="scan-torch-btn" id="scan-torch-btn" onclick="toggleScanTorch_()" style="display:none;">플래시</button>
+        </div>
+        <div class="scan-diag" id="scan-diag"></div>
       </div>
       <div id="scan-debug-wrap" style="display:none;margin-top:8px;">
         <div class="field-label">방금 분석한 사진(인식 실패 시 확인용)</div>
@@ -1436,6 +1468,10 @@ function closeDetail(){ document.getElementById('detail-overlay').classList.remo
 let zxingReader_ = null;
 let nativePollTimer_ = null;
 let currentStream_ = null;
+/* 카메라를 켜는 도중(권한 대기/기기 전환 등 await 사이)에 모달을 닫거나 카메라를 바꾸면
+   뒤늦게 열린 스트림이 정리되지 않고 남아 카메라가 계속 켜져 있게 됨 → 세대 번호로 무효화 */
+let scanSession_ = 0;
+let scanNudgeTimers_ = [];
 let scanCache_ = null; // 인식/조회된 책 정보(알라딘 형식)
 function openBarcode(){
   document.getElementById('barcode-overlay').classList.add('active');
@@ -1445,8 +1481,9 @@ function closeBarcode(){
   document.getElementById('barcode-overlay').classList.remove('active');
   stopScanCamera_();
 }
+const SCAN_HINT_DEFAULT = '바코드가 화면 가로폭의 2/3 정도 되게, 수평으로 비춰주세요';
 function restartScan(){
-  document.getElementById('scan-hint').textContent = '바코드 전체가 잘리지 않게, 화면 절반 크기로 수평이 되게 비춰주세요';
+  document.getElementById('scan-hint').textContent = SCAN_HINT_DEFAULT;
   document.getElementById('scan-state').style.display = 'block';
   document.getElementById('scan-manual').style.display = 'none';
   document.getElementById('scan-found').style.display = 'none';
@@ -1460,6 +1497,8 @@ function showManualIsbn(){
   document.getElementById('scan-manual').style.display = 'block';
 }
 function stopScanCamera_(){
+  scanSession_++;   // 진행 중이던 startScanCamera_가 있으면 그쪽 결과를 무효화
+  scanNudgeTimers_.forEach(clearTimeout); scanNudgeTimers_ = [];
   if(nativePollTimer_){ clearInterval(nativePollTimer_); nativePollTimer_ = null; }
   if(zxingReader_){ try{ zxingReader_.reset(); }catch(e){} }
   const video = document.getElementById('scan-video');
@@ -1579,57 +1618,233 @@ async function handleNativeCapture_(input){
   };
   reader.readAsDataURL(file);
 }
-/* 화면 탭하면 그 지점 근처로 다시 초점을 맞추도록 시도 — 브라우저/기기마다 지원 여부가 달라서
-   (Android Chrome 일부 기기만 focusMode 제어가 됨) 안 되는 기기에서는 조용히 무시됨.
-   실제 초점 이동 여부와 상관없이 탭한 자리에 링 애니메이션은 항상 보여줌(눌렀다는 피드백용). */
-function tapToFocus_(e){
+/* 화면 탭하면 그 지점으로 초점을 맞추도록 시도.
+   예전 버전은 pointsOfInterest(초점을 맞출 좌표)를 안 넘기고 focusMode만 바꿨고, 지원이 안 되면
+   조용히 아무것도 안 해서 "탭해도 아무 반응 없음"으로만 보였음. 이제 좌표를 같이 넘기고,
+   지원 안 되는 기기에서는 그 사실을 안내 문구로 알려줌(고정초점 렌즈면 줌/카메라 변경으로 유도). */
+function setScanHint_(msg){ document.getElementById('scan-hint').textContent = msg; }
+async function tapToFocus_(e){
   const rect = e.currentTarget.getBoundingClientRect();
   const ring = document.createElement('div');
   ring.className = 'focus-ring';
-  ring.style.left = (e.clientX - rect.left) + 'px';
-  ring.style.top = (e.clientY - rect.top) + 'px';
+  const px = e.clientX - rect.left, py = e.clientY - rect.top;
+  ring.style.left = px + 'px';
+  ring.style.top = py + 'px';
   e.currentTarget.appendChild(ring);
   setTimeout(() => ring.remove(), 650);
 
   if(!currentStream_) return;
   const track = currentStream_.getVideoTracks()[0];
   if(!track || typeof track.getCapabilities !== 'function') return;
+  const caps = track.getCapabilities();
+  const advanced = [];
+  /* 탭 좌표를 0~1로 정규화해서 전달 (object-fit:cover라 약간의 오차는 있지만 초점 영역 지정엔 충분) */
+  if(caps.pointsOfInterest){
+    advanced.push({ pointsOfInterest: [{ x: Math.min(1, Math.max(0, px / rect.width)),
+                                         y: Math.min(1, Math.max(0, py / rect.height)) }] });
+  }
+  if(caps.focusMode && caps.focusMode.includes('single-shot')) advanced.push({ focusMode: 'single-shot' });
+  else if(caps.focusMode && caps.focusMode.includes('continuous')) advanced.push({ focusMode: 'continuous' });
+
+  if(!advanced.length){
+    setScanHint_('이 카메라는 초점 조절을 지원하지 않아요(고정초점 렌즈일 수 있어요). 아래에서 다른 카메라를 골라보거나, 폰을 30cm 이상 떼고 줌을 당겨보세요.');
+    return;
+  }
   try{
-    const caps = track.getCapabilities();
-    if(!caps.focusMode) return;
-    if(caps.focusMode.includes('single-shot')){
-      track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] })
-        .then(() => {
-          if(caps.focusMode.includes('continuous')){
-            setTimeout(() => {
-              track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(()=>{});
-            }, 1200);
-          }
-        })
-        .catch(()=>{});
-    }
-  }catch(err){ /* 이 기기/브라우저는 지원 안 함 — 조용히 무시 */ }
+    await track.applyConstraints({ advanced });
+    setScanHint_('초점 맞추는 중...');
+    setTimeout(() => setScanHint_(SCAN_HINT_DEFAULT), 1200);
+  }catch(err){
+    setScanHint_('초점 조절이 이 기기에선 안 돼요(' + (err.name||'오류') + '). 폰을 30cm 이상 떼고 줌을 당겨보세요.');
+  }
+}
+/* ---- 카메라 선택 ----
+   facingMode:'environment'만 요청하면 브라우저가 후면 카메라 중 아무거나 고르는데, 요즘 폰은 후면에
+   메인/초광각/망원이 여러 개 있고 초광각은 대부분 '고정초점(AF 모터 없음)'이라 근접 촬영에서
+   절대 선명해지지 않음(탭 투 포커스도 무시됨). 그래서 실제 기기 목록을 열거해서 메인 카메라를
+   고르고, 추정이 틀릴 수 있으니 사용자가 직접 바꿀 수 있는 드롭다운도 제공함. */
+const SCAN_CAM_KEY = 'ilgeoyong_scan_camera_id';
+function scoreBackCamera_(label){
+  const s = (label || '').toLowerCase();
+  let score = 0;
+  if(/front|user|전면|셀피|selfie/.test(s)) return -100;          // 전면 카메라는 제외
+  if(/back|rear|후면|environment/.test(s)) score += 10;
+  if(/ultra|초광각|wide.?angle|0\.5/.test(s)) score -= 8;          // 초광각 = 고정초점인 경우가 많음
+  if(/tele|망원|zoom lens/.test(s)) score -= 6;                    // 망원은 근접 최소초점거리가 김
+  if(/depth|심도|mono|적외선|ir\b/.test(s)) score -= 20;           // 촬영용이 아님
+  if(/macro|매크로/.test(s)) score += 6;                           // 있으면 근접에 최적
+  if(/camera2 0|\b0,/.test(s)) score += 3;                         // 안드로이드는 보통 0번이 메인
+  return score;
+}
+async function listBackCameras_(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter(d => d.kind === 'videoinput' && scoreBackCamera_(d.label) > -50);
+  }catch(err){ return []; }
+}
+function switchScanCamera_(deviceId){
+  if(!deviceId) return;
+  try{ localStorage.setItem(SCAN_CAM_KEY, deviceId); }catch(e){}
+  stopScanCamera_();
+  startScanCamera_(deviceId);
+}
+function applyScanZoom_(value){
+  document.getElementById('scan-zoom-val').textContent = Number(value).toFixed(1) + 'x';
+  if(!currentStream_) return;
+  const track = currentStream_.getVideoTracks()[0];
+  if(!track) return;
+  track.applyConstraints({ advanced: [{ zoom: Number(value) }] }).catch(()=>{});
+}
+function toggleScanTorch_(){
+  if(!currentStream_) return;
+  const track = currentStream_.getVideoTracks()[0];
+  if(!track) return;
+  const btn = document.getElementById('scan-torch-btn');
+  const turnOn = !btn.classList.contains('on');
+  track.applyConstraints({ advanced: [{ torch: turnOn }] })
+    .then(() => btn.classList.toggle('on', turnOn))
+    .catch(() => setScanHint_('이 기기는 플래시 제어를 지원하지 않아요.'));
+}
+/* 초점 관련 제어가 가능하면 근접 촬영에 유리하게 미리 맞춰둠 */
+async function applyFocusTuning_(track){
+  const caps = (typeof track.getCapabilities === 'function') ? track.getCapabilities() : {};
+  if(caps.focusMode && caps.focusMode.includes('continuous')){
+    try{ await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); }catch(e){}
+  } else if(caps.focusMode && caps.focusMode.includes('manual') && caps.focusDistance){
+    /* 연속 AF가 없고 수동 초점만 되는 기기 — 최단 초점거리(가장 가까이)로 맞춰 매크로처럼 씀 */
+    try{
+      await track.applyConstraints({ advanced: [{ focusMode: 'manual', focusDistance: caps.focusDistance.min }] });
+    }catch(e){}
+  }
+}
+/* 카메라 목록/줌/플래시 컨트롤을 실제 지원 여부에 맞춰 구성 */
+async function setupCameraControls_(track){
+  const caps = (typeof track.getCapabilities === 'function') ? track.getCapabilities() : {};
+  const settings = (typeof track.getSettings === 'function') ? track.getSettings() : {};
+
+  const cams = await listBackCameras_();
+  const camRow = document.getElementById('scan-cam-row');
+  const sel = document.getElementById('scan-cam-select');
+  if(cams.length > 1){
+    sel.innerHTML = cams.map((d, i) =>
+      `<option value="${escapeHtml(d.deviceId)}">${escapeHtml(d.label || ('카메라 ' + (i+1)))}</option>`).join('');
+    if(settings.deviceId) sel.value = settings.deviceId;
+    camRow.style.display = 'flex';
+  } else {
+    camRow.style.display = 'none';
+  }
+
+  const zoomRow = document.getElementById('scan-zoom-row');
+  const range = document.getElementById('scan-zoom-range');
+  if(caps.zoom){
+    range.min = caps.zoom.min;
+    range.max = caps.zoom.max;
+    range.step = caps.zoom.step || 0.1;
+    range.value = settings.zoom || caps.zoom.min;
+    document.getElementById('scan-zoom-val').textContent = Number(range.value).toFixed(1) + 'x';
+    zoomRow.style.display = 'flex';
+  } else {
+    zoomRow.style.display = 'none';
+  }
+  const torchBtn = document.getElementById('scan-torch-btn');
+  torchBtn.classList.remove('on');
+  if(caps.torch){
+    torchBtn.style.display = 'block';
+    zoomRow.style.display = 'flex';   // 줌이 없어도 플래시 버튼은 보이게
+  } else {
+    torchBtn.style.display = 'none';
+  }
+
+  renderScanDiag_(track, caps, settings, cams);
+}
+/* 원격으로 사용자 폰 카메라를 볼 수 없으니, 실제로 어떤 카메라가 어떤 성능으로 열렸는지를
+   화면에 찍어줌 — 인식이 안 될 때 이 내용을 스크린샷으로 받으면 바로 진단이 됨 */
+function renderScanDiag_(track, caps, settings, cams){
+  const lines = [];
+  lines.push('카메라: ' + (track.label || '(이름 없음)'));
+  lines.push('해상도: ' + (settings.width || '?') + '×' + (settings.height || '?'));
+  lines.push('후면 카메라 개수: ' + (cams.length || '?'));
+  lines.push('하드웨어 인식기: ' + (typeof BarcodeDetector !== 'undefined' ? '있음' : '없음(zxing 사용)'));
+  lines.push('초점모드: ' + (caps.focusMode ? caps.focusMode.join('/') : '제어 불가'));
+  lines.push('초점거리조절: ' + (caps.focusDistance ? '가능' : '불가'));
+  lines.push('탭 초점(POI): ' + (caps.pointsOfInterest ? '가능' : '불가'));
+  lines.push('줌: ' + (caps.zoom ? caps.zoom.min + '~' + caps.zoom.max : '불가'));
+  lines.push('플래시: ' + (caps.torch ? '가능' : '불가'));
+  document.getElementById('scan-diag').textContent = lines.join('\n');
 }
 /* 실시간 스캔도 네이티브 BarcodeDetector가 있으면 그걸 우선 사용(직접 getUserMedia로 스트림을 얻어
    video에 붙이고, setInterval로 프레임을 주기적으로 검사). 없으면 zxing의 decodeContinuously로 폴백 —
    이때도 이미 붙여놓은 같은 스트림을 재사용해서(attachStreamToVideo) getUserMedia를 두 번 부르지 않음. */
-async function startScanCamera_(){
+async function startScanCamera_(preferredDeviceId){
   const hint = document.getElementById('scan-hint');
   const video = document.getElementById('scan-video');
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
     hint.textContent = '이 브라우저는 카메라를 지원하지 않아요. 직접 ISBN을 입력해주세요.';
     return;
   }
+  const mySession = ++scanSession_;
+  const stale_ = (s) => {
+    if(mySession === scanSession_) return false;
+    if(s) s.getTracks().forEach(t => t.stop());   // 그 사이 닫혔음 — 늦게 열린 스트림은 바로 정리
+    return true;
+  };
+  let savedId = preferredDeviceId;
+  if(!savedId){ try{ savedId = localStorage.getItem(SCAN_CAM_KEY) || ''; }catch(e){ savedId = ''; } }
+  const baseVideo = { width: { ideal: 1920 }, height: { ideal: 1080 } };
   try{
-    const stream = await navigator.mediaDevices.getUserMedia(
-      { video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } }
-    );
+    let stream = null;
+    if(savedId){
+      /* 저장/선택된 카메라를 정확히 지정해서 열기 — 실패하면(기기 바뀜 등) 아래 기본 방식으로 폴백 */
+      try{
+        stream = await navigator.mediaDevices.getUserMedia(
+          { video: Object.assign({ deviceId: { exact: savedId } }, baseVideo) });
+      }catch(err){ stream = null; }
+    }
+    if(!stream){
+      stream = await navigator.mediaDevices.getUserMedia(
+        { video: Object.assign({ facingMode: 'environment' }, baseVideo) });
+    }
+    if(stale_(stream)) return;
     currentStream_ = stream;
     video.srcObject = stream;
     video.style.display = 'block';
     document.getElementById('scan-viewfinder').classList.add('live');
-    await video.play();
+    /* play()를 await하지 않음 — 카메라가 첫 프레임을 늦게 주면 그 promise가 오래 걸려서
+       뒤따르는 초점 설정/컨트롤 표시까지 통째로 늦어짐(video에 autoplay가 걸려 있어 재생은 됨) */
+    video.play().catch(()=>{});
     document.getElementById('scan-capture-btn').style.display = 'block';
+
+    let track = stream.getVideoTracks()[0];
+    /* 처음 켤 때(저장된 선택이 없을 때)는 브라우저가 초광각 같은 고정초점 카메라를 골랐을 수 있으므로,
+       권한이 생긴 지금 기기 목록을 다시 읽어서 근접 촬영에 제일 나은 카메라로 한 번 갈아탐 */
+    if(!savedId){
+      const cams = await listBackCameras_();
+      if(cams.length > 1){
+        const best = cams.slice().sort((a, b) => scoreBackCamera_(b.label) - scoreBackCamera_(a.label))[0];
+        const nowId = (typeof track.getSettings === 'function') ? track.getSettings().deviceId : '';
+        if(best && best.deviceId && best.deviceId !== nowId){
+          try{
+            const better = await navigator.mediaDevices.getUserMedia(
+              { video: Object.assign({ deviceId: { exact: best.deviceId } }, baseVideo) });
+            if(stale_(better)) return;
+            stream.getTracks().forEach(t => t.stop());
+            currentStream_ = better;
+            video.srcObject = better;
+            video.play().catch(()=>{});
+            track = better.getVideoTracks()[0];
+            try{ localStorage.setItem(SCAN_CAM_KEY, best.deviceId); }catch(e){}
+          }catch(err){ /* 갈아타기 실패 — 원래 스트림 그대로 사용 */ }
+        }
+      }
+    }
+    await applyFocusTuning_(track);
+    setupCameraControls_(track).catch(()=>{});
+    /* 한참 인식이 안 되면 대개 초점 문제 — 흐릿한 채로 계속 들이대지 말고 거리를 벌리도록 유도 */
+    scanNudgeTimers_ = [
+      setTimeout(() => setScanHint_('잘 안 되면 화면을 한 번 탭해서 초점을 맞춰보세요'), 7000),
+      setTimeout(() => setScanHint_('아직 흐릿한가요? 폰을 30cm 이상 떼고 아래 줌으로 당겨보세요'), 15000)
+    ];
 
     if(typeof BarcodeDetector !== 'undefined'){
       const detector = new BarcodeDetector({ formats: ['ean_13', 'upc_a'] });
