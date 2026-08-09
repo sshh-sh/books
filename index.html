@@ -394,20 +394,14 @@ main{flex:1;padding:22px 24px 60px;}
 .stat-num{font-family:var(--mono);font-size:1.8rem;font-weight:700;font-variant-numeric:tabular-nums;}
 .stat-label{font-size:0.78rem;color:var(--ink-soft);margin-top:2px;}
 .mini-heading{font-family:var(--sans);font-size:0.8rem;color:var(--ink-soft);font-weight:600;}
-.month-table{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 10px;overflow-x:auto;}
-.mt-row{display:flex;gap:2px;align-items:center;}
-.mt-row + .mt-row{margin-top:6px;padding-top:6px;border-top:1px solid var(--line);}
-#mt-year-rows{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);}
-.mt-row span{flex:1;text-align:center;min-width:18px;font-size:0.82rem;font-variant-numeric:tabular-nums;}
-.mt-rlabel{
-  flex:0 0 64px !important;text-align:left !important;color:var(--ink-soft);font-size:0.74rem !important;
-  min-width:64px;white-space:nowrap;
+.month-table{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 10px;}
+.mt-grid{display:grid;grid-template-columns:28px repeat(12,1fr);gap:3px;align-items:center;}
+.mt-grid .mt-mlabel{font-size:0.62rem;color:var(--ink-soft);text-align:center;}
+.mt-grid .mt-ylabel{font-size:0.72rem;color:var(--ink-soft);white-space:nowrap;}
+.mt-cell{
+  aspect-ratio:1;border-radius:5px;display:flex;align-items:center;justify-content:center;
+  font-size:0.68rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-soft);
 }
-.mt-total{
-  flex:0 0 48px !important;font-weight:700;color:var(--accent);white-space:nowrap;
-}
-.mt-this span:not(.mt-rlabel){color:var(--accent);font-weight:700;}
-.mt-last span:not(.mt-rlabel){color:var(--ink-soft);opacity:0.75;}
 .month-divider{
   grid-column:1/-1;font-family:var(--display);font-weight:800;font-size:0.95rem;color:var(--ink-soft);
   margin:14px 0 2px;padding-top:10px;border-top:1px solid var(--line);
@@ -527,12 +521,11 @@ main{flex:1;padding:22px 24px 60px;}
 
       <div class="section-title">월별 독서량</div>
       <div class="month-table">
-        <div class="mt-row" id="mt-months"></div>
-        <div id="mt-year-rows"></div>
+        <div class="mt-grid" id="mt-grid"></div>
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.8</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.9</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -554,7 +547,7 @@ main{flex:1;padding:22px 24px 60px;}
       <div class="note-box" id="detail-blurb">불러오는 중...</div>
     </div>
 
-    <div class="field-block">
+    <div class="field-block" id="detail-libs-block">
       <div class="field-label">도서관 소장 현황</div>
       <div id="detail-libs"><div class="empty-msg" style="padding:4px 0;text-align:left;">불러오는 중...</div></div>
     </div>
@@ -1198,22 +1191,28 @@ async function loadStats(){
     yearsSet.add(currentYear);
     const years = [...yearsSet].sort((a,b)=>b-a); // 최신 연도부터
 
-    document.getElementById('mt-months').innerHTML = '<span class="mt-rlabel">월</span>' +
-      Array.from({length:12}, (_,i)=>`<span>${i+1}</span>`).join('') + '<span class="mt-total">합계</span>';
-
-    document.getElementById('mt-year-rows').innerHTML = years.map(year=>{
+    const yearMonthCounts = years.map(year=>{
       const monthCounts = Array(12).fill(0);
       finished.forEach(b=>{
         const d = new Date(normalizeDateVal_(b.userBook.read_date));
         if(d.getFullYear() === year) monthCounts[d.getMonth()]++;
       });
-      const total = monthCounts.reduce((a,c)=>a+c, 0);
-      const cells = monthCounts.map((c,i)=>
-        `<span>${ (year===currentYear && i > now.getMonth()) ? '–' : c }</span>`
-      ).join('');
-      const cls = year === currentYear ? 'mt-this' : 'mt-last';
-      return `<div class="mt-row ${cls}"><span class="mt-rlabel">${String(year).slice(2)}년</span>${cells}<span class="mt-total">${total}</span></div>`;
-    }).join('');
+      return { year, monthCounts };
+    });
+    const maxCount = Math.max(1, ...yearMonthCounts.flatMap(y=>y.monthCounts));
+
+    let gridHtml = '<span></span>' +
+      Array.from({length:12}, (_,i)=>`<span class="mt-mlabel">${i+1}</span>`).join('');
+    yearMonthCounts.forEach(({year, monthCounts})=>{
+      gridHtml += `<span class="mt-ylabel">${String(year).slice(2)}년</span>`;
+      monthCounts.forEach((c,i)=>{
+        if(year === currentYear && i > now.getMonth()){ gridHtml += '<div class="mt-cell"></div>'; return; }
+        const alpha = c === 0 ? 0.06 : 0.18 + (c / maxCount) * 0.72;
+        const textColor = alpha > 0.5 ? '#fff' : 'var(--ink-soft)';
+        gridHtml += `<div class="mt-cell" style="background:rgba(184,33,94,${alpha.toFixed(2)});color:${textColor};">${c || ''}</div>`;
+      });
+    });
+    document.getElementById('mt-grid').innerHTML = gridHtml;
   }catch(err){ showApiError(err); }
 }
 
@@ -1392,7 +1391,13 @@ async function openDetail(kind, userBookId){
   const note = (b.userBook.reason_note || '').trim();
   document.getElementById('detail-note').textContent = note || '아직 없어요.';
   document.getElementById('detail-blurb').textContent = '불러오는 중...';
-  renderDetailLibsFromRaw_(b);
+  const libsBlock = document.getElementById('detail-libs-block');
+  if(kind === 'want'){
+    libsBlock.style.display = '';
+    renderDetailLibsFromRaw_(b);
+  } else {
+    libsBlock.style.display = 'none';
+  }
   document.getElementById('detail-overlay').classList.add('active');
 
   if(!b.isbn){ document.getElementById('detail-blurb').textContent = '줄거리 정보가 없어요.'; return; }
