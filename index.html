@@ -191,8 +191,10 @@ main{flex:1;padding:22px 24px 60px;}
 .branch-toolbar .sort-combo{max-width:118px;}
 
 /* ---- 맨 위/아래 이동 버튼 ---- */
+/* 화면 세로 중앙(top:50%)에 두면 종합해용 히트맵의 12월 칸 위에 딱 겹쳐서 숫자를 가림 →
+   콘텐츠가 거의 없는 우측 하단으로 내림(엄지로 누르기도 더 편함) */
 .scroll-nav{
-  position:fixed;right:10px;top:50%;transform:translateY(-50%);
+  position:fixed;right:10px;bottom:22px;
   display:flex;flex-direction:column;gap:6px;z-index:50;
 }
 .scroll-nav button{
@@ -545,7 +547,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.10</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v19.11</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -724,6 +726,17 @@ function handleAddError_(err){
   if(err && err.message === '이미 등록된 책이에요.'){ alert('이미 등록된 책이에요.'); return; }
   showApiError(err);
 }
+/* 버튼을 빠르게 두 번 누르면 등록 요청이 두 번 나가고, 서버가 둘 다 '중복 없음'으로 판단해
+   같은 책이 두 줄 저장되는 일이 실제로 있었음(userBookId 315/316 등). 백엔드에도 잠금을 걸었지만
+   요청 자체를 안 보내는 게 확실해서 앞단에서도 막음 — 처리 중이면 두 번째 호출은 그냥 무시. */
+let addInFlight_ = false;
+async function runAddOnce_(fn){
+  if(addInFlight_) return;
+  addInFlight_ = true;
+  try{ await fn(); }
+  catch(err){ handleAddError_(err); }
+  finally{ addInFlight_ = false; }
+}
 
 /* ============ 탭 전환 ============ */
 document.querySelectorAll('.tab-btn').forEach(btn=>{
@@ -802,13 +815,13 @@ async function doSearch(){
 }
 async function addWant(i){
   const item = searchCache[i];
-  try{
+  await runAddOnce_(async () => {
     await apiPost('addToWantList', { bookData: item, reasonNote: '' });
     document.getElementById('search-results').innerHTML = '';
     document.getElementById('search-results').style.display = 'none';
     document.getElementById('search-input').value = '';
     loadWant();
-  }catch(err){ handleAddError_(err); }
+  });
 }
 
 /* ============ 읽을래용: 목록 ============ */
@@ -1033,14 +1046,14 @@ async function removeReadingThis(userBookId, btn){
 /* ============ 검색 결과 → 읽는중이용/읽었어용 바로 추가 ============ */
 async function addReadingFromSearch(i){
   const item = searchCache[i];
-  try{
+  await runAddOnce_(async () => {
     await apiPost('addToReadingList', { bookData: item, reasonNote: '' });
     document.getElementById('search-results').innerHTML = '';
     document.getElementById('search-results').style.display = 'none';
     document.getElementById('search-input').value = '';
     toggleSearch();
     loadReading();
-  }catch(err){ handleAddError_(err); }
+  });
 }
 function openDoneAdd(i){
   doneAddPendingIndex_ = i;
@@ -1056,7 +1069,7 @@ async function confirmDoneAdd(){
   const item = searchCache[doneAddPendingIndex_];
   const readDate = parseShortDateStr_(document.getElementById('doneadd-date').value);
   const note = document.getElementById('doneadd-memo').value.trim();
-  try{
+  await runAddOnce_(async () => {
     await apiPost('addFinishedBookDirect', { bookData: item, note, readDate });
     closeDoneAdd();
     document.getElementById('search-results').innerHTML = '';
@@ -1064,7 +1077,7 @@ async function confirmDoneAdd(){
     document.getElementById('search-input').value = '';
     toggleSearch();
     loadDone(); loadStats();
-  }catch(err){ handleAddError_(err); }
+  });
 }
 
 /* ============ 카드 ⋯메뉴: 수정(제목/저자, 읽었어용은 날짜도) ============ */
@@ -1917,7 +1930,7 @@ async function addScannedBook(){
     openDoneAdd(0);
     return;
   }
-  try{
+  await runAddOnce_(async () => {
     if(view === 'reading'){
       await apiPost('addToReadingList', { bookData: item, reasonNote: '' });
       loadReading();
@@ -1926,7 +1939,7 @@ async function addScannedBook(){
       loadWant();
     }
     closeBarcode();
-  }catch(err){ handleAddError_(err); }
+  });
 }
 
 /* ============ 초기 로드 ============ */

@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -686,24 +686,48 @@ function assertNotDuplicateUserBook_(bookId, status) {
   if (dup) throw new Error('이미 등록된 책이에요.');
 }
 
+/**
+ * "중복인지 확인 → 없으면 추가"를 한 번에 한 요청씩만 실행되게 감쌈.
+ * 잠금이 없으면 버튼 연타나 요청 재전송으로 두 요청이 거의 동시에 들어왔을 때
+ * 둘 다 '중복 없음'을 읽고 둘 다 appendRow를 해버려서 같은 책이 두 줄 생김
+ * (실제로 userBookId 315/316, 299/300이 이렇게 만들어진 걸 확인함).
+ */
+function withUserBookLock_(fn) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (err) {
+    throw new Error('지금 다른 작업이 처리 중이에요. 잠시 후 다시 시도해주세요.');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function addToWantList(bookData, reasonNote) {
-  const bookId = findOrCreateBook_(bookData);
-  assertNotDuplicateUserBook_(bookId, '읽고싶음');
-  const sheet = getSheet_(SHEETS.USER_BOOKS);
-  const id = nextId_(sheet);
-  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  sheet.appendRow([id, bookId, '읽고싶음', '도서관', today, '', false, reasonNote || '']);
-  return id;
+  return withUserBookLock_(function () {
+    const bookId = findOrCreateBook_(bookData);
+    assertNotDuplicateUserBook_(bookId, '읽고싶음');
+    const sheet = getSheet_(SHEETS.USER_BOOKS);
+    const id = nextId_(sheet);
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    sheet.appendRow([id, bookId, '읽고싶음', '도서관', today, '', false, reasonNote || '']);
+    return id;
+  });
 }
 
 function addToReadingList(bookData, reasonNote, source) {
-  const bookId = findOrCreateBook_(bookData);
-  assertNotDuplicateUserBook_(bookId, '읽는중');
-  const sheet = getSheet_(SHEETS.USER_BOOKS);
-  const id = nextId_(sheet);
-  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  sheet.appendRow([id, bookId, '읽는중', source || '도서관외', today, '', false, reasonNote || '']);
-  return id;
+  return withUserBookLock_(function () {
+    const bookId = findOrCreateBook_(bookData);
+    assertNotDuplicateUserBook_(bookId, '읽는중');
+    const sheet = getSheet_(SHEETS.USER_BOOKS);
+    const id = nextId_(sheet);
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    sheet.appendRow([id, bookId, '읽는중', source || '도서관외', today, '', false, reasonNote || '']);
+    return id;
+  });
 }
 
 /**
@@ -713,13 +737,15 @@ function addToReadingList(bookData, reasonNote, source) {
  * 처음부터 최종 상태(읽음+날짜)로 한 줄만 추가하도록 바꿔서 왕복 횟수를 1번으로 줄임.
  */
 function addFinishedBookDirect(bookData, note, readDate) {
-  const bookId = findOrCreateBook_(bookData);
-  assertNotDuplicateUserBook_(bookId, '읽음');
-  const sheet = getSheet_(SHEETS.USER_BOOKS);
-  const id = nextId_(sheet);
-  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  sheet.appendRow([id, bookId, '읽음', '도서관외', today, readDate, false, note || '']);
-  return id;
+  return withUserBookLock_(function () {
+    const bookId = findOrCreateBook_(bookData);
+    assertNotDuplicateUserBook_(bookId, '읽음');
+    const sheet = getSheet_(SHEETS.USER_BOOKS);
+    const id = nextId_(sheet);
+    const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    sheet.appendRow([id, bookId, '읽음', '도서관외', today, readDate, false, note || '']);
+    return id;
+  });
 }
 
 function markBorrowed_toReading(userBookId) {
