@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v1';
+const APP_VERSION = 'v2';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -898,6 +898,25 @@ function getStats() {
   };
 }
 
+/**
+ * 화면 초기 로드 시 getWantList/getReadingList/getDoneList/getStats/getLibraryBranches를
+ * 5개 요청으로 따로따로 부르면, 같은 스프레드시트에 대한 동시 실행이 Apps Script/시트 서비스
+ * 단에서 큐잉되어(요청끼리 순서대로 밀림) 실측 기준 마지막 응답이 25초 가까이 걸렸음
+ * (단독 호출은 4~5초). 한 번의 실행 안에서 필요한 것만 모아 반환해서 그 큐잉 지연을 없앰.
+ * parts를 안 주면 5개 다 반환. 각 부분은 기존 함수를 그대로 호출하므로 개별 action과
+ * 결과가 100% 동일함(로직 중복 없음).
+ */
+function getBundle_(parts) {
+  const list = (parts && parts.length) ? parts : ['want', 'reading', 'done', 'stats', 'branches'];
+  const out = {};
+  if (list.indexOf('want') !== -1) out.want = getWantList();
+  if (list.indexOf('reading') !== -1) out.reading = getReadingList();
+  if (list.indexOf('done') !== -1) out.done = getDoneList();
+  if (list.indexOf('stats') !== -1) out.stats = getStats();
+  if (list.indexOf('branches') !== -1) out.branches = getLibraryBranches();
+  return out;
+}
+
 /* ---------------- 웹앱 진입점 ---------------- */
 
 /* ---------------- JSON API (깃허브 페이지에서 fetch로 호출) ---------------- */
@@ -915,6 +934,7 @@ const API_ACTIONS = {
   getDoneList: () => getDoneList(),
   getStats: () => getStats(),
   getLibraryBranches: () => getLibraryBranches(),
+  getBundle: (p) => getBundle_(p.parts ? String(p.parts).split(',') : null),
   getBookAvailability: (p) => getBookAvailability(p.isbn13),
   getBookAvailabilityCached: (p) => getBookAvailabilityCached(p.isbn13, p.bookId),
   seedKnownAvailability: (p) => seedKnownAvailability(p.isbn13, p.libs, p.callno),
