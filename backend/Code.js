@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v2';
+const APP_VERSION = 'v3';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -853,29 +853,39 @@ function updateUserBookField_(userBookId, field, value) {
 
 /* ---------------- 목록 조회 (화면용) ---------------- */
 
-function getListByStatus_(status) {
-  const userBooks = sheetToObjects_(getSheet_(SHEETS.USER_BOOKS))
-    .filter(ub => ub.status === status);
-  const books = sheetToObjects_(getSheet_(SHEETS.BOOKS));
-  const bookById = {};
-  books.forEach(b => bookById[b.id] = b);
-
-  return userBooks
-    .sort((a, b) => new Date(a.added_date) - new Date(b.added_date))
-    .map(ub => Object.assign({}, bookById[ub.book_id], { userBook: ub }));
-}
-
-function getWantList() { return getListByStatus_('읽고싶음'); }
-function getReadingList() { return getListByStatus_('읽는중'); }
-function getDoneList() { return getListByStatus_('읽음'); }
-
-/* ---------------- 통계 ---------------- */
-
-function getStats() {
+/**
+ * Books/UserBooks 시트를 한 번만 읽어서 getWantList/getReadingList/getDoneList/getStats가
+ * 공유해서 쓰는 컨텍스트. getBundle_처럼 여러 개를 한 번에 계산할 때 시트를 반복해서
+ * 읽지 않도록 하기 위함(예전엔 getBundle 하나 처리하는 동안 이 두 시트를 5번씩 읽었음).
+ * ctx를 안 넘기면(개별 action으로 단독 호출될 때) 각 함수가 알아서 새로 읽어오므로
+ * 기존 개별 API 동작은 그대로임.
+ */
+function loadBookContext_() {
   const userBooks = sheetToObjects_(getSheet_(SHEETS.USER_BOOKS));
   const books = sheetToObjects_(getSheet_(SHEETS.BOOKS));
   const bookById = {};
   books.forEach(b => bookById[b.id] = b);
+  return { userBooks: userBooks, books: books, bookById: bookById };
+}
+
+function getListByStatus_(status, ctx) {
+  ctx = ctx || loadBookContext_();
+  return ctx.userBooks
+    .filter(ub => ub.status === status)
+    .sort((a, b) => new Date(a.added_date) - new Date(b.added_date))
+    .map(ub => Object.assign({}, ctx.bookById[ub.book_id], { userBook: ub }));
+}
+
+function getWantList(ctx) { return getListByStatus_('읽고싶음', ctx); }
+function getReadingList(ctx) { return getListByStatus_('읽는중', ctx); }
+function getDoneList(ctx) { return getListByStatus_('읽음', ctx); }
+
+/* ---------------- 통계 ---------------- */
+
+function getStats(ctx) {
+  ctx = ctx || loadBookContext_();
+  const userBooks = ctx.userBooks;
+  const bookById = ctx.bookById;
   const thisYear = new Date().getFullYear();
 
   const doneThisYear = userBooks.filter(ub =>
@@ -909,10 +919,12 @@ function getStats() {
 function getBundle_(parts) {
   const list = (parts && parts.length) ? parts : ['want', 'reading', 'done', 'stats', 'branches'];
   const out = {};
-  if (list.indexOf('want') !== -1) out.want = getWantList();
-  if (list.indexOf('reading') !== -1) out.reading = getReadingList();
-  if (list.indexOf('done') !== -1) out.done = getDoneList();
-  if (list.indexOf('stats') !== -1) out.stats = getStats();
+  const needsCtx = ['want', 'reading', 'done', 'stats'].some(function (p) { return list.indexOf(p) !== -1; });
+  const ctx = needsCtx ? loadBookContext_() : null;
+  if (list.indexOf('want') !== -1) out.want = getWantList(ctx);
+  if (list.indexOf('reading') !== -1) out.reading = getReadingList(ctx);
+  if (list.indexOf('done') !== -1) out.done = getDoneList(ctx);
+  if (list.indexOf('stats') !== -1) out.stats = getStats(ctx);
   if (list.indexOf('branches') !== -1) out.branches = getLibraryBranches();
   return out;
 }
