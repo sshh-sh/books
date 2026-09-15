@@ -555,7 +555,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v2</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v3</span></footer>
 </div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
@@ -722,6 +722,32 @@ async function apiPost(action, payload){
   if(!json.ok) throw new Error(json.error || 'API 오류');
   return json.data;
 }
+/* 읽을래용/읽는중이용/읽었어용/종합해용/지점목록 중 여러 개를 동시에 새로고침해야 할 때
+   (초기 로드, 상태 변경 후 등) 개별 apiGet을 따로따로 날리면 같은 스프레드시트에 대한
+   동시 요청이 서버 쪽에서 큐잉되어 순서대로 밀림(5개 동시 호출 시 마지막 응답이 25초까지
+   걸리는 걸 확인함). getBundle 액션으로 한 번에 모아 받아서 그 지연을 없앰.
+   getBundle이 아직 없는 구버전 백엔드에 배포된 경우를 대비해, 실패하면 기존 방식(개별
+   호출)으로 자동 폴백 — 배포 순서와 무관하게 항상 정상 동작하도록. */
+async function apiGetBundle(parts){
+  return await apiGet('getBundle', { parts: parts.join(',') });
+}
+async function refreshParts_(parts){
+  try{
+    const d = await apiGetBundle(parts);
+    if(parts.indexOf('want')!==-1) loadWant(d.want);
+    if(parts.indexOf('reading')!==-1) loadReading(d.reading);
+    if(parts.indexOf('done')!==-1) loadDone(d.done);
+    if(parts.indexOf('stats')!==-1) loadStats(d.stats, d.done);
+    if(parts.indexOf('branches')!==-1) loadBranches(d.branches);
+  }catch(err){
+    console.warn('getBundle 실패, 개별 호출로 폴백', err);
+    if(parts.indexOf('want')!==-1) loadWant();
+    if(parts.indexOf('reading')!==-1) loadReading();
+    if(parts.indexOf('done')!==-1) loadDone();
+    if(parts.indexOf('stats')!==-1) loadStats();
+    if(parts.indexOf('branches')!==-1) loadBranches();
+  }
+}
 function escapeHtml(str){
   return (str==null?'':String(str)).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
@@ -873,10 +899,10 @@ function wantCardHtml(b){
   `;
 }
 
-async function loadWant(){
+async function loadWant(preloaded){
   const grid = document.getElementById('book-grid');
   try{
-    const list = await apiGet('getWantList');
+    const list = preloaded || await apiGet('getWantList');
     wantCache = list;
     renderWantCount();
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">아직 담은 책이 없어요. 위에서 검색해서 담아보세요.</div>'; return; }
@@ -985,10 +1011,10 @@ function adjustReasonRows_(textarea){
 
 /* ============ 읽는중이용 ============ */
 let readingCache = [];
-async function loadReading(){
+async function loadReading(preloaded){
   const grid = document.getElementById('reading-grid');
   try{
-    const list = await apiGet('getReadingList');
+    const list = preloaded || await apiGet('getReadingList');
     readingCache = list;
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">읽는 중인 책이 없어요.</div>'; return; }
     grid.innerHTML = list.map(b => `
@@ -1033,14 +1059,14 @@ async function openFinishPrompt(userBookId, checkbox){
   checkbox.disabled = true;
   try{
     await apiPost('markFinished', { userBookId, readDate: parseShortDateStr_(raw) });
-    loadReading(); loadDone(); loadStats();
+    refreshParts_(['reading','done','stats']);
   }catch(err){ showApiError(err); checkbox.disabled=false; checkbox.checked=false; }
 }
 async function dropThis(userBookId, btn){
   btn.closest('.kebab-menu').classList.remove('open');
   try{
     await apiPost('markDropped', { userBookId });
-    loadReading(); loadDone(); loadStats();
+    refreshParts_(['reading','done','stats']);
   }catch(err){ showApiError(err); }
 }
 async function removeReadingThis(userBookId, btn){
@@ -1084,7 +1110,7 @@ async function confirmDoneAdd(){
     document.getElementById('search-results').style.display = 'none';
     document.getElementById('search-input').value = '';
     toggleSearch();
-    loadDone(); loadStats();
+    refreshParts_(['done','stats']);
   });
 }
 
@@ -1127,7 +1153,7 @@ async function confirmEdit(){
     closeRecord();
     if(editCtx_.kind === 'want') loadWant();
     else if(editCtx_.kind === 'reading') loadReading();
-    else { loadDone(); loadStats(); }
+    else { refreshParts_(['done','stats']); }
   }catch(err){ showApiError(err); }
 }
 
@@ -1177,10 +1203,10 @@ function doneCardHtml(b){
     </div>
   `;
 }
-async function loadDone(){
+async function loadDone(preloaded){
   const grid = document.getElementById('done-list');
   try{
-    const list = await apiGet('getDoneList');
+    const list = preloaded || await apiGet('getDoneList');
     doneCache = list;
     if(!list.length){ grid.innerHTML = '<div class="empty-msg">아직 읽은 책이 없어요.</div>'; document.getElementById('done-year-select').innerHTML=''; document.getElementById('done-count').textContent=''; return; }
     const years = [...new Set(list.map(doneYearKey_))].filter(Boolean).sort().reverse();
@@ -1217,14 +1243,14 @@ async function removeDoneThis(userBookId){
   if(!confirm('이 책 기록을 삭제할까요?')) return;
   try{
     await apiPost('removeUserBook', { userBookId });
-    loadDone(); loadStats();
+    refreshParts_(['done','stats']);
   }catch(err){ showApiError(err); }
 }
 
 /* ============ 종합해용 ============ */
-async function loadStats(){
+async function loadStats(preloadedStats, preloadedDone){
   try{
-    const s = await apiGet('getStats');
+    const s = preloadedStats || await apiGet('getStats');
     document.getElementById('stat-done').textContent = s.doneThisYear;
     document.getElementById('stat-want').textContent = s.wantCount;
     const total = (s.categoryCounts['소설']||0) + (s.categoryCounts['비소설']||0);
@@ -1236,7 +1262,7 @@ async function loadStats(){
   }catch(err){ showApiError(err); }
 
   try{
-    const done = await apiGet('getDoneList');
+    const done = preloadedDone || await apiGet('getDoneList');
     const now = new Date();
     const currentYear = now.getFullYear();
     const finished = done.filter(b => !b.userBook.dropped && b.userBook.read_date);
@@ -1276,10 +1302,10 @@ const ALWAYS_VISIBLE_BRANCHES = ['남사','용인중앙'];
 let branchListExpanded = false;
 let branchNamesCache = [];
 
-async function loadBranches(){
+async function loadBranches(preloaded){
   const row = document.getElementById('branch-row');
   try{
-    const branches = await apiGet('getLibraryBranches');
+    const branches = preloaded || await apiGet('getLibraryBranches');
     if(!branches.length){
       const note = document.createElement('span');
       note.className = 'branch-hint';
@@ -1953,11 +1979,7 @@ async function addScannedBook(){
 }
 
 /* ============ 초기 로드 ============ */
-loadWant();
-loadReading();
-loadDone();
-loadStats();
-loadBranches();
+refreshParts_(['want','reading','done','stats','branches']);
 </script>
 
 </body>
