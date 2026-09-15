@@ -110,6 +110,12 @@ main{flex:1;padding:22px 24px 60px;}
   padding:12px;margin-bottom:16px;
 }
 .search-popover.open{display:block;}
+.search-close-btn{
+  flex-shrink:0;width:38px;padding:0;border-radius:999px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);
+  font-size:1.1rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+.search-close-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
 .search-bar{display:flex;gap:8px;min-width:0;}
 .search-bar input{
   flex:1;min-width:0;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
@@ -136,6 +142,9 @@ main{flex:1;padding:22px 24px 60px;}
   padding:8px 14px;font-size:0.8rem;font-weight:600;cursor:pointer;white-space:nowrap;
 }
 .add-btn:hover{background:var(--accent-soft);}
+.add-btn:disabled{cursor:default;}
+.add-btn.added{border-color:var(--ok);color:var(--ok);background:none;}
+.add-btn.added:hover{background:none;}
 .barcode-btn{
   flex-shrink:0;padding:10px 14px;border-radius:999px;border:1px solid var(--line);
   background:var(--surface);color:var(--ink);font-family:var(--sans);font-size:0.85rem;
@@ -145,6 +154,17 @@ main{flex:1;padding:22px 24px 60px;}
 .already-tag{
   font-size:0.75rem;color:var(--ink-soft);font-family:var(--sans);white-space:nowrap;flex-shrink:0;
 }
+
+/* ---- 토스트 안내 ---- */
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(10px);
+  background:var(--accent);color:#fff;padding:11px 22px;border-radius:999px;
+  font-family:var(--sans);font-size:0.85rem;font-weight:600;text-align:center;
+  max-width:86vw;box-shadow:0 8px 20px rgba(0,0,0,.18);
+  opacity:0;pointer-events:none;transition:opacity .25s ease, transform .25s ease;
+  z-index:200;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
 /* ---- 도서관 지점 필터 ---- */
 .branch-toolbar{
@@ -498,6 +518,7 @@ main{flex:1;padding:22px 24px 60px;}
         <input type="text" id="search-input" placeholder="제목, 저자, ISBN으로 검색해서 바로 담기" onkeydown="if(event.key==='Enter') doSearch()">
         <button onclick="doSearch()">검색</button>
         <button class="barcode-btn" onclick="openBarcode()">바코드</button>
+        <button class="search-close-btn" onclick="closeSearch()" aria-label="검색창 닫기">×</button>
       </div>
       <div class="search-results" id="search-results" style="display:none;"></div>
     </div>
@@ -555,8 +576,9 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v3</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v4</span></footer>
 </div>
+<div class="toast" id="toast"></div>
 
 <!-- DETAIL MODAL (읽을래용/읽는중이용/읽었어용 공통) -->
 <div class="overlay" id="detail-overlay">
@@ -731,6 +753,20 @@ async function apiPost(action, payload){
 async function apiGetBundle(parts){
   return await apiGet('getBundle', { parts: parts.join(',') });
 }
+
+/* 마지막으로 성공한 전체 목록을 브라우저에 저장해뒀다가, 다음에 열 때 네트워크 응답을
+   기다리지 않고 그 화면부터 바로 보여줌(그 사이에 최신 데이터로 조용히 교체됨).
+   실제 데이터는 여전히 서버가 정답이라, 여기 실패/무시는 그냥 매번 새로 받는 것과 같음. */
+const BUNDLE_CACHE_KEY = 'bookAppBundleCache_v1';
+function saveBundleCache_(d){
+  try{ localStorage.setItem(BUNDLE_CACHE_KEY, JSON.stringify(d)); }catch(e){ /* 용량 초과 등은 무시 */ }
+}
+function loadBundleCache_(){
+  try{
+    const raw = localStorage.getItem(BUNDLE_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
 async function refreshParts_(parts){
   try{
     const d = await apiGetBundle(parts);
@@ -746,6 +782,31 @@ async function refreshParts_(parts){
     if(parts.indexOf('done')!==-1) loadDone();
     if(parts.indexOf('stats')!==-1) loadStats();
     if(parts.indexOf('branches')!==-1) loadBranches();
+  }
+}
+/* 페이지를 열자마자 네트워크를 기다리지 않고, 마지막으로 저장해둔 캐시로 먼저 그려준 뒤
+   실제 최신 데이터를 받아서 조용히 다시 그림(캐시가 없으면 지금까지처럼 그냥 기다림).
+   화면이 항상 "최신 상태"로 끝나는 건 동일하고, 재방문 시 체감 로딩만 없어짐. */
+async function initialLoad_(){
+  const cached = loadBundleCache_();
+  if(cached){
+    if(cached.want) loadWant(cached.want);
+    if(cached.reading) loadReading(cached.reading);
+    if(cached.done) loadDone(cached.done);
+    if(cached.stats) loadStats(cached.stats, cached.done);
+    if(cached.branches) loadBranches(cached.branches);
+  }
+  try{
+    const d = await apiGetBundle(['want','reading','done','stats','branches']);
+    loadWant(d.want);
+    loadReading(d.reading);
+    loadDone(d.done);
+    loadStats(d.stats, d.done);
+    loadBranches(d.branches);
+    saveBundleCache_(d);
+  }catch(err){
+    console.warn('getBundle 실패, 개별 호출로 폴백', err);
+    loadWant(); loadReading(); loadDone(); loadStats(); loadBranches();
   }
 }
 function escapeHtml(str){
@@ -786,6 +847,38 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 function toggleSearch(){
   document.getElementById('search-popover').classList.toggle('open');
   document.querySelector('.search-toggle').classList.toggle('active');
+}
+/* X 버튼 전용 — 담기 완료 시엔 더 이상 이 함수를 부르지 않음(패널이 자동으로 안 닫히게).
+   패널을 실제로 닫는 유일한 경로라, 여기서만 검색 상태(입력값·결과)를 다 지움 */
+function closeSearch(){
+  document.getElementById('search-popover').classList.remove('open');
+  document.querySelector('.search-toggle').classList.remove('active');
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-results').style.display = 'none';
+  document.getElementById('search-input').value = '';
+}
+
+/* ============ 토스트 안내(alert 대신 잠깐 떴다 사라지는 인라인 메시지) ============ */
+let toastTimer_ = null;
+function showToast(message){
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toastTimer_);
+  toastTimer_ = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* 검색 결과 목록에서 담기가 끝난 줄의 버튼을 완료 상태로 바꿔줌(패널은 그대로 열어둠 —
+   같은 검색 결과에서 여러 권을 연달아 담을 수 있도록) */
+function markResultAdded_(i){
+  const row = document.querySelector(`.result-row[data-idx="${i}"]`);
+  if(!row) return;
+  const btn = row.querySelector('.add-btn');
+  if(!btn) return;
+  btn.textContent = '✓ 담았어요';
+  btn.disabled = true;
+  btn.classList.add('added');
+  btn.removeAttribute('onclick');
 }
 
 /* ============ 날짜 짧은 형식(YYMMDD, 예: 260731) 도우미 ============ */
@@ -833,7 +926,7 @@ async function doSearch(){
     const addLabel = view === 'reading' ? '+ 읽는중 추가' : view === 'done' ? '+ 읽음 추가' : '+ 담기';
     const addFn = view === 'reading' ? 'addReadingFromSearch' : view === 'done' ? 'openDoneAdd' : 'addWant';
     box.innerHTML = items.map((it,i)=>`
-      <div class="result-row">
+      <div class="result-row" data-idx="${i}">
         <img class="cover" src="${it.cover||''}" alt="">
         <div class="book-meta">
           <div class="book-title">${escapeHtml(it.title)}</div>
@@ -851,9 +944,8 @@ async function addWant(i){
   const item = searchCache[i];
   await runAddOnce_(async () => {
     await apiPost('addToWantList', { bookData: item, reasonNote: '' });
-    document.getElementById('search-results').innerHTML = '';
-    document.getElementById('search-results').style.display = 'none';
-    document.getElementById('search-input').value = '';
+    markResultAdded_(i);
+    showToast(`『${item.title}』을(를) 읽을래용에 담았어요`);
     loadWant();
   });
 }
@@ -1057,9 +1149,11 @@ async function openFinishPrompt(userBookId, checkbox){
   const raw = prompt('읽은 날짜 (예: 260731)', todayShort);
   if(raw === null){ checkbox.checked = false; return; }
   checkbox.disabled = true;
+  const item = readingCache.find(b => b.userBook.id === userBookId); // refreshParts_가 readingCache를 갈아치우기 전에 제목 확보
   try{
     await apiPost('markFinished', { userBookId, readDate: parseShortDateStr_(raw) });
     refreshParts_(['reading','done','stats']);
+    showToast(`${item ? '『'+item.title+'』을(를) ' : ''}읽었어용으로 옮겼어요`);
   }catch(err){ showApiError(err); checkbox.disabled=false; checkbox.checked=false; }
 }
 async function dropThis(userBookId, btn){
@@ -1082,10 +1176,8 @@ async function addReadingFromSearch(i){
   const item = searchCache[i];
   await runAddOnce_(async () => {
     await apiPost('addToReadingList', { bookData: item, reasonNote: '' });
-    document.getElementById('search-results').innerHTML = '';
-    document.getElementById('search-results').style.display = 'none';
-    document.getElementById('search-input').value = '';
-    toggleSearch();
+    markResultAdded_(i);
+    showToast(`『${item.title}』을(를) 읽는중이용에 담았어요`);
     loadReading();
   });
 }
@@ -1106,10 +1198,8 @@ async function confirmDoneAdd(){
   await runAddOnce_(async () => {
     await apiPost('addFinishedBookDirect', { bookData: item, note, readDate });
     closeDoneAdd();
-    document.getElementById('search-results').innerHTML = '';
-    document.getElementById('search-results').style.display = 'none';
-    document.getElementById('search-input').value = '';
-    toggleSearch();
+    markResultAdded_(doneAddPendingIndex_);
+    showToast(`『${item.title}』을(를) 읽었어용에 담았어요`);
     refreshParts_(['done','stats']);
   });
 }
@@ -1979,7 +2069,7 @@ async function addScannedBook(){
 }
 
 /* ============ 초기 로드 ============ */
-refreshParts_(['want','reading','done','stats','branches']);
+initialLoad_();
 </script>
 
 </body>
