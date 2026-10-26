@@ -11,7 +11,7 @@ const SHEETS = {
   BRANCHES: 'LibraryBranches'
 };
 
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v4';
 
 function stripDoseogwan_(name) {
   return (name || '').replace(/도서관$/, '');
@@ -64,47 +64,83 @@ function nextId_(sheet) {
   return Math.max(0, ...ids) + 1;
 }
 
-/* ---------------- 알라딘 검색 ---------------- */
+/* ---------------- 카카오 도서 검색 ---------------- */
 
-function searchAladin(query) {
-  const key = PropertiesService.getScriptProperties().getProperty('ALADIN_KEY');
-  if (!key) throw new Error('ALADIN_KEY가 설정되지 않았습니다.');
-  const url = 'https://www.aladin.co.kr/ttb/api/ItemSearch.aspx'
-    + '?ttbkey=' + encodeURIComponent(key)
-    + '&Query=' + encodeURIComponent(query)
-    + '&QueryType=Keyword&MaxResults=10&start=1&SearchTarget=Book'
-    + '&output=js&Version=20131101';
-  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  const data = JSON.parse(res.getContentText());
-  if (!data.item) return [];
-  return data.item.map(it => ({
-    title: cleanTitle_(it.title),
-    author: it.author,
-    isbn13: it.isbn13,
-    pubDate: it.pubDate,
-    cover: it.cover,
-    description: it.description,
-    category: guessCategory_(it.categoryName),
-    country: '' // 알라딘은 국가 정보를 항상 주지 않음 → 없으면 '기타'로 처리
-  }));
+function kakaoBookSearch_(params) {
+  const key = PropertiesService.getScriptProperties().getProperty('KAKAO_KEY');
+  if (!key) throw new Error('KAKAO_KEY가 설정되지 않았습니다.');
+  const qs = Object.keys(params).map(k => k + '=' + encodeURIComponent(params[k])).join('&');
+  const res = UrlFetchApp.fetch('https://dapi.kakao.com/v3/search/book?' + qs, {
+    headers: { Authorization: 'KakaoAK ' + key },
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() !== 200) {
+    throw new Error('카카오 도서검색 오류 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  }
+  return JSON.parse(res.getContentText()).documents || [];
+}
+
+/** 카카오 응답 1건을 기존 화면이 쓰던 형태로 변환. category는 담을 때 채움(findOrCreateBook_). */
+function kakaoDocToItem_(d) {
+  const isbns = String(d.isbn || '').split(/\s+/).filter(Boolean);
+  const isbn13 = isbns.filter(x => x.length === 13)[0] || isbns[isbns.length - 1] || '';
+  const authors = (d.authors || []).join(', ');
+  const translators = (d.translators || []).join(', ');
+  return {
+    title: cleanTitle_(d.title),
+    author: authors + (translators ? ' (지은이), ' + translators + ' (옮긴이)' : ''),
+    isbn13: isbn13,
+    pubDate: String(d.datetime || '').slice(0, 10),
+    cover: d.thumbnail || '',
+    description: d.contents || '',
+    category: '',
+    country: ''
+  };
+}
+
+function searchBooks(query) {
+  return kakaoBookSearch_({ query: query, size: 10 }).map(kakaoDocToItem_);
+}
+
+/** ISBN13으로 1건 조회. 못 찾으면 null. */
+function lookupBookByIsbn_(isbn13) {
+  const docs = kakaoBookSearch_({ query: isbn13, target: 'isbn', size: 1 });
+  return docs.length ? kakaoDocToItem_(docs[0]) : null;
+}
+
+/**
+ * 정보나루 도서 상세(srchDtlList)의 분류기호(KDC)로 소설 여부 판별. KDC 소설은 8x3 (813 한국, 833 일본, 843 영미 …).
+ * 조회 실패·분류 없음이면 '기타'.
+ */
+function fetchCategoryByIsbn_(isbn13) {
+  const key = PropertiesService.getScriptProperties().getProperty('LIBRARY_KEY');
+  if (!key || !isbn13) return '기타';
+  try {
+    const url = 'http://data4library.kr/api/srchDtlList'
+      + '?authKey=' + encodeURIComponent(key)
+      + '&isbn13=' + encodeURIComponent(isbn13)
+      + '&format=json';
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const data = JSON.parse(res.getContentText());
+    const detail = data.response && data.response.detail && data.response.detail[0];
+    const book = detail && detail.book;
+    if (!book) return '기타';
+    const classNo = String(book.class_no || '');
+    const classNm = String(book.class_nm || '');
+    if (!classNo && !classNm) return '기타';
+    return (/^8\d3/.test(classNo) || classNm.indexOf('소설') !== -1) ? '소설' : '비소설';
+  } catch (err) { return '기타'; }
 }
 
 function cleanTitle_(title) {
   return (title || '').replace(/\s*-\s*.*$/, '').trim(); // 부제 정리(필요시 조정)
 }
 
-function guessCategory_(categoryName) {
-  if (!categoryName) return '기타';
-  return categoryName.indexOf('소설') !== -1 ? '소설' : '비소설';
-}
-
 /**
  * 복구용: 외부에서 잘못된 인코딩으로 등록된 title/author(깨진 문자, U+FFFD 포함)를
- * ISBN으로 알라딘을 다시 조회해서 덮어씀. 정상인 행은 건드리지 않아 여러 번 실행해도 안전.
+ * ISBN으로 카카오를 다시 조회해서 덮어씀. 정상인 행은 건드리지 않아 여러 번 실행해도 안전.
  */
 function repairBookTitlesByIsbn() {
-  const key = PropertiesService.getScriptProperties().getProperty('ALADIN_KEY');
-  if (!key) throw new Error('ALADIN_KEY가 설정되지 않았습니다.');
   const sheet = getSheet_(SHEETS.BOOKS);
   const values = sheet.getDataRange().getValues();
   const headers = values[0];
@@ -123,17 +159,11 @@ function repairBookTitlesByIsbn() {
     if (!isbn) continue;
     if (title.indexOf('�') === -1 && author.indexOf('�') === -1 && category.indexOf('�') === -1) continue;
 
-    const url = 'https://www.aladin.co.kr/ttb/api/ItemLookUp.aspx'
-      + '?ttbkey=' + encodeURIComponent(key)
-      + '&itemIdType=ISBN13&ItemId=' + encodeURIComponent(isbn)
-      + '&output=js&Version=20131101&OptResult=categoryIdList';
-    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    const data = JSON.parse(res.getContentText());
-    if (data.item && data.item[0]) {
-      const it = data.item[0];
-      const newTitle = cleanTitle_(it.title);
+    const it = lookupBookByIsbn_(isbn);
+    if (it) {
+      const newTitle = it.title;
       const newAuthor = it.author;
-      const newCategory = guessCategory_(it.categoryName);
+      const newCategory = fetchCategoryByIsbn_(isbn);
       sheet.getRange(r + 1, idxTitle + 1).setValue(newTitle);
       sheet.getRange(r + 1, idxAuthor + 1).setValue(newAuthor);
       sheet.getRange(r + 1, idxCategory + 1).setValue(newCategory);
@@ -543,7 +573,7 @@ function findOrCreateBook_(bookData) {
   const id = nextId_(sheet);
   sheet.appendRow([
     id, bookData.title, bookData.author, bookData.isbn13,
-    bookData.category || '기타', bookData.country || '기타',
+    bookData.category || fetchCategoryByIsbn_(bookData.isbn13), bookData.country || '기타',
     bookData.cover || '', bookData.series_name || '',
     bookData.series_total || '', bookData.series_order || ''
   ]);
@@ -622,29 +652,6 @@ function mergeDuplicateBooksByIsbn() {
 
 /* ---------------- 과거 독서기록 일괄 등록 ---------------- */
 
-function itemLookupAladin_(isbn13) {
-  const key = PropertiesService.getScriptProperties().getProperty('ALADIN_KEY');
-  if (!key) throw new Error('ALADIN_KEY가 설정되지 않았습니다.');
-  const url = 'https://www.aladin.co.kr/ttb/api/ItemLookUp.aspx'
-    + '?ttbkey=' + encodeURIComponent(key)
-    + '&itemIdType=ISBN13&ItemId=' + encodeURIComponent(isbn13)
-    + '&output=js&Version=20131101';
-  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  const data = JSON.parse(res.getContentText());
-  if (!data.item || !data.item[0]) return null;
-  const it = data.item[0];
-  return {
-    title: cleanTitle_(it.title),
-    author: it.author,
-    isbn13: it.isbn13,
-    pubDate: it.pubDate,
-    cover: it.cover,
-    description: it.description,
-    category: guessCategory_(it.categoryName),
-    country: ''
-  };
-}
-
 /**
  * 과거 독서기록(2024~2026 이미지에서 추출한 목록)을 읽었어용에 일괄 등록.
  * items: [{ title, author, isbn(선택), readDate: 'YYYY-MM-DD', note }]
@@ -656,14 +663,14 @@ function bulkImportReadBooks(items) {
     try {
       let bookData = null;
       if (item.isbn) {
-        try { bookData = itemLookupAladin_(item.isbn); } catch (e) { bookData = null; }
+        try { bookData = lookupBookByIsbn_(item.isbn); } catch (e) { bookData = null; }
       }
       if (!bookData) {
-        const found = searchAladin(((item.title || '') + ' ' + (item.author || '')).trim());
+        const found = searchBooks(((item.title || '') + ' ' + (item.author || '')).trim());
         if (found && found.length) bookData = found[0];
       }
       if (!bookData) {
-        results.push({ title: item.title, ok: false, error: '알라딘에서 못 찾음' });
+        results.push({ title: item.title, ok: false, error: '검색에서 못 찾음' });
         return;
       }
       const userBookId = addToReadingList(bookData, item.note || '', '독서기록가져오기');
@@ -933,13 +940,13 @@ function getBundle_(parts) {
 
 /* ---------------- JSON API (깃허브 페이지에서 fetch로 호출) ---------------- */
 
-/** 바코드 스캔/직접 입력한 ISBN13으로 알라딘에서 책 1건 조회. 못 찾으면 null. */
+/** 바코드 스캔/직접 입력한 ISBN13으로 책 1건 조회. 못 찾으면 null. */
 function lookupByIsbn(isbn13) {
-  return itemLookupAladin_(String(isbn13 || '').replace(/[^0-9Xx]/g, ''));
+  return lookupBookByIsbn_(String(isbn13 || '').replace(/[^0-9Xx]/g, ''));
 }
 
 const API_ACTIONS = {
-  searchAladin: (p) => searchAladin(p.query),
+  searchBooks: (p) => searchBooks(p.query),
   lookupByIsbn: (p) => lookupByIsbn(p.isbn13),
   getWantList: () => getWantList(),
   getReadingList: () => getReadingList(),

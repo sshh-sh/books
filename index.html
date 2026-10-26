@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>송희의 독서목록</title>
+<title>읽어용</title>
 <style>
 @font-face{
   font-family:"Jalnan2";
@@ -180,6 +180,8 @@ main{flex:1;padding:22px 24px 60px;}
   padding:6px 10px;cursor:grab;user-select:none;white-space:nowrap;flex-shrink:0;
 }
 .chip-select.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
+.branch-hint{font-size:0.72rem;color:var(--muted,#888);white-space:nowrap;margin-left:4px;}
+.chip-select.excluded{text-decoration:line-through;background:#eee;border-color:#bbb;color:#888;}
 .chip-select.dragging{opacity:0.4;}
 .chip-select.drag-over{border-color:var(--accent);border-style:dashed;}
 .more-branch-btn{
@@ -576,7 +578,7 @@ main{flex:1;padding:22px 24px 60px;}
       </div>
     </section>
   </main>
-  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v4</span></footer>
+  <footer class="site-footer">© 2026 읽어용 · 개발 최송희 · <span id="app-version">v6</span></footer>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -916,7 +918,7 @@ async function doSearch(){
   box.style.display = 'block';
   box.innerHTML = '<div class="empty-msg">검색 중...</div>';
   try{
-    const items = await apiGet('searchAladin', { query: q });
+    const items = await apiGet('searchBooks', { query: q });
     searchCache = items;
     if(!items.length){ box.innerHTML = '<div class="empty-msg">검색 결과가 없어요.</div>'; return; }
     const view = activeTabView_();
@@ -954,7 +956,13 @@ async function addWant(i){
 let wantCache = [];
 let bookLibrariesMap = {}; // book_id -> ['남사','수지',...] (보유 도서관 이름 목록, 필터용)
 let bookCallnoMap = {}; // book_id -> {'남사':'813.6', '용인중앙':'813.62'} (지점별 청구기호, 남사/용인중앙만)
-let activeBranchFilter = null; // null이면 전체
+let branchFilter = {}; // {지점명:'has'|'not'} — 비어 있으면 전체. has=소장, not=소장 안 함
+function primaryBranch_(){ return Object.keys(branchFilter).filter(n => branchFilter[n]==='has')[0] || null; }
+function cycleBranchFilter_(name){
+  if(!branchFilter[name]) branchFilter[name] = 'has';
+  else if(branchFilter[name]==='has') branchFilter[name] = 'not';
+  else delete branchFilter[name];
+}
 let wantSortMode = 'added_desc'; // added_desc|added_asc|title_asc|title_desc|callno_asc|callno_desc
 
 function renderWantCount(){
@@ -1413,23 +1421,32 @@ function renderBranchRow_(){
   row.innerHTML = '';
 
   const allBtn = document.createElement('button');
-  allBtn.className = 'chip-select' + (activeBranchFilter===null ? ' active' : '');
+  allBtn.className = 'chip-select' + (Object.keys(branchFilter).length===0 ? ' active' : '');
   allBtn.textContent = '전체';
-  allBtn.addEventListener('click', ()=>{ activeBranchFilter = null; renderBranchRow_(); applyBranchFilter(); });
+  allBtn.addEventListener('click', ()=>{ branchFilter = {}; renderBranchRow_(); applyBranchFilter(); });
   row.appendChild(allBtn);
 
   const toShow = branchListExpanded
     ? branchNamesCache
-    : branchNamesCache.filter(n => ALWAYS_VISIBLE_BRANCHES.indexOf(n) !== -1);
+    : branchNamesCache.filter(n => ALWAYS_VISIBLE_BRANCHES.indexOf(n) !== -1 || branchFilter[n]);
 
   toShow.forEach(name=>{
     const btn = document.createElement('button');
-    btn.className = 'chip-select' + (activeBranchFilter===name ? ' active' : '');
+    btn.className = 'chip-select' + (branchFilter[name]==='has' ? ' active' : branchFilter[name]==='not' ? ' excluded' : '');
+    btn.title = '누를 때마다: 있음 → 없음 → 해제';
     btn.textContent = name;
     btn.draggable = true;
-    btn.addEventListener('click', ()=>{ activeBranchFilter = name; renderBranchRow_(); applyBranchFilter(); });
+    btn.addEventListener('click', ()=>{ cycleBranchFilter_(name); renderBranchRow_(); applyBranchFilter(); });
     row.appendChild(btn);
   });
+
+  const hasAny = Object.keys(branchFilter).length > 0;
+  if(hasAny && !Object.keys(branchFilter).some(n => branchFilter[n]==='not')){
+    const hint = document.createElement('span');
+    hint.className = 'branch-hint';
+    hint.textContent = '한 번 더 누르면 없음';
+    row.appendChild(hint);
+  }
 
   const moreBtn = document.createElement('button');
   moreBtn.className = 'more-branch-btn';
@@ -1458,15 +1475,17 @@ function updateCallnoTags_(){
     const tag = document.getElementById('callno-'+card.dataset.userBookId);
     if(!tag) return;
     const callnos = bookCallnoMap[card.dataset.bookId];
-    const cn = activeBranchFilter && callnos ? callnos[activeBranchFilter] : '';
-    tag.textContent = cn ? `${activeBranchFilter} 청구기호 ${cn}` : '';
+    const pb = primaryBranch_();
+    const cn = pb && callnos ? callnos[pb] : '';
+    tag.textContent = cn ? `${pb} 청구기호 ${cn}` : '';
   });
 }
 
 /* 청구기호순 정렬용: 도서관 필터가 걸려있으면 그 도서관 청구기호, 아니면 알고 있는 청구기호 중 아무거나 사용 */
 function callnoForSort_(bookId){
   const map = bookCallnoMap[bookId] || {};
-  if(activeBranchFilter && map[activeBranchFilter]) return map[activeBranchFilter];
+  const pb = primaryBranch_();
+  if(pb && map[pb]) return map[pb];
   const vals = Object.keys(map).map(k=>map[k]).filter(Boolean);
   return vals[0] || '';
 }
@@ -1475,10 +1494,13 @@ function applyBranchFilter(){
   const cards = [...grid.querySelectorAll('.book-card')];
 
   cards.forEach(card=>{
-    if(activeBranchFilter === null){ card.style.display = ''; return; }
+    const names = Object.keys(branchFilter);
+    if(names.length === 0){ card.style.display = ''; return; }
     const libs = bookLibrariesMap[card.dataset.bookId];
-    const owns = Array.isArray(libs) && libs.indexOf(activeBranchFilter) !== -1;
-    card.style.display = owns ? '' : 'none';
+    // 소장 정보를 아직 못 받은 책은 '없음' 조건에서 오판하지 않도록 숨김
+    const ok = Array.isArray(libs) && names.every(n =>
+      branchFilter[n]==='has' ? libs.indexOf(n) !== -1 : libs.indexOf(n) === -1);
+    card.style.display = ok ? '' : 'none';
   });
 
   const visible = cards.filter(c=>c.style.display !== 'none');
@@ -1611,7 +1633,7 @@ let currentStream_ = null;
    뒤늦게 열린 스트림이 정리되지 않고 남아 카메라가 계속 켜져 있게 됨 → 세대 번호로 무효화 */
 let scanSession_ = 0;
 let scanNudgeTimers_ = [];
-let scanCache_ = null; // 인식/조회된 책 정보(알라딘 형식)
+let scanCache_ = null; // 인식/조회된 책 정보(검색 결과 형식)
 function openBarcode(){
   document.getElementById('barcode-overlay').classList.add('active');
   restartScan();
